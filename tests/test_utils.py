@@ -23,8 +23,7 @@ def test_sha256_file_known_content():
         tmp = f.name
     try:
         digest = sha256_file(tmp)
-        assert len(digest) == 64
-        assert digest == 'e17455f2fc5a8b5f5a7cf03b0b18fd5c1a5a69cc95d7d0f4a3e5df7e8d4e3ea3' or len(digest) == 64
+        assert digest == '324d7d5be8a556ce498e7a69782b19f17d93d43c6420f4dabc7f69cd7e183f0a'
     finally:
         os.unlink(tmp)
 

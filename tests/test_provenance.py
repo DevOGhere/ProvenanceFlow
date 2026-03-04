@@ -151,3 +151,90 @@ def test_query_get_activities(tmp_store, tmp_csv):
     t.finalize(tmp_store)
     activities = get_activities(tmp_store, t.run_id)
     assert len(activities) >= 1
+
+
+# ── PROV structural attribute tests ─────────────────────────────────────────
+
+def _get_ingestion_entity(doc: dict) -> dict:
+    """Return attrs of the raw dataset entity from a PROV doc."""
+    for eid, attrs in doc['entity'].items():
+        if 'dataset_' in eid:
+            return attrs
+    raise KeyError("No dataset entity found")
+
+
+def _get_validation_activity(doc: dict) -> dict:
+    """Return attrs of the validate activity from a PROV doc."""
+    for aid, attrs in doc['activity'].items():
+        if 'validate_' in aid:
+            return attrs
+    raise KeyError("No validate activity found")
+
+
+def test_prov_entity_has_checksum(tmp_store, tmp_csv):
+    t = ProvenanceTracker()
+    t.track_ingestion('https://example.com/data.csv', tmp_csv, 10)
+    t.finalize(tmp_store)
+    doc = tmp_store.get(t.run_id)
+    attrs = _get_ingestion_entity(doc)
+    assert 'pf:checksum_sha256' in attrs
+
+
+def test_prov_entity_has_fair_identifier(tmp_store, tmp_csv):
+    t = ProvenanceTracker()
+    t.track_ingestion('https://example.com/data.csv', tmp_csv, 10)
+    t.finalize(tmp_store)
+    doc = tmp_store.get(t.run_id)
+    attrs = _get_ingestion_entity(doc)
+    assert 'fair:identifier' in attrs
+    fid = attrs['fair:identifier']
+    assert fid.startswith('dataset_')
+
+
+def test_prov_entity_has_row_count(tmp_store, tmp_csv):
+    t = ProvenanceTracker()
+    t.track_ingestion('https://example.com/data.csv', tmp_csv, 42)
+    t.finalize(tmp_store)
+    doc = tmp_store.get(t.run_id)
+    attrs = _get_ingestion_entity(doc)
+    raw_rc = attrs['pf:row_count']
+    # PROV-JSON stores typed literals as {"$": value, "type": "..."}
+    row_count = raw_rc['$'] if isinstance(raw_rc, dict) else raw_rc
+    assert row_count == 42
+
+
+def test_prov_activity_has_rejection_rate(tmp_store, tmp_csv):
+    t = ProvenanceTracker()
+    raw = t.track_ingestion('https://example.com/data.csv', tmp_csv, 100)
+    t.track_validation(raw, rows_in=100, rows_passed=90,
+                       rejections={'range_check': 10}, warnings={},
+                       rules_applied=['null_check', 'range_check'])
+    t.finalize(tmp_store)
+    doc = tmp_store.get(t.run_id)
+    attrs = _get_validation_activity(doc)
+    assert 'pf:rejection_rate' in attrs
+
+
+def test_prov_has_was_associated_with(tmp_store, tmp_csv):
+    t = ProvenanceTracker()
+    t.track_ingestion('https://example.com/data.csv', tmp_csv, 5)
+    t.finalize(tmp_store)
+    doc = tmp_store.get(t.run_id)
+    assert 'wasAssociatedWith' in doc
+
+
+def test_prov_rules_applied_reflects_actual_rules(tmp_store, tmp_csv):
+    """rules_applied in PROV should be the list passed in, not a hardcoded string."""
+    t = ProvenanceTracker()
+    raw = t.track_ingestion('https://example.com/data.csv', tmp_csv, 10)
+    t.track_validation(raw, rows_in=10, rows_passed=9,
+                       rejections={}, warnings={},
+                       rules_applied=['null_check', 'range_check'])
+    t.finalize(tmp_store)
+    doc = tmp_store.get(t.run_id)
+    attrs = _get_validation_activity(doc)
+    rules_str = attrs['pf:rules_applied']
+    assert 'null_check' in rules_str
+    assert 'range_check' in rules_str
+    # Should NOT contain rules that were not passed
+    assert 'temporal_continuity' not in rules_str
