@@ -34,6 +34,7 @@ def run_pipeline(source_url: str, local_path: str,
         rows_passed=len(clean_df),
         rejections=rejections,
         warnings=warnings,
+        rules_applied=Validator.RULE_NAMES,
     )
 
     # Step 3: Finalize provenance

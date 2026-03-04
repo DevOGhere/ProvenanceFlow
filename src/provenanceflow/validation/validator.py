@@ -12,6 +12,14 @@ from .rules import (
 class Validator:
     """Runs all validation rules against a GISTEMP DataFrame."""
 
+    RULE_NAMES = [
+        'null_check',
+        'range_check',
+        'completeness_check',
+        'temporal_continuity',
+        'baseline_integrity',
+    ]
+
     def validate(self, df: pd.DataFrame) -> list[ValidationResult]:
         results: list[ValidationResult] = []
 

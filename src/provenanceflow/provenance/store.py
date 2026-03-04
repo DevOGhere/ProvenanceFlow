@@ -37,10 +37,22 @@ class ProvenanceStore:
         self.conn.commit()
 
     def save(self, run_id: str, prov_json: dict):
+        created_at = datetime.utcnow().isoformat()
         self.conn.execute(
             "INSERT OR REPLACE INTO provenance_runs VALUES (?, ?, ?, ?)",
-            (run_id, datetime.utcnow().isoformat(), json.dumps(prov_json, indent=2), None)
+            (run_id, created_at, json.dumps(prov_json, indent=2), None)
         )
+        # Populate entities table from PROV-JSON
+        self.conn.execute("DELETE FROM entities WHERE run_id = ?", (run_id,))
+        for entity_id, attrs in prov_json.get('entity', {}).items():
+            label = attrs.get('prov:label')
+            raw_rc = attrs.get('pf:row_count')
+            # PROV-JSON serializes typed literals as {"$": value, "type": "..."}
+            row_count = raw_rc['$'] if isinstance(raw_rc, dict) else raw_rc
+            self.conn.execute(
+                "INSERT INTO entities (entity_id, run_id, label, row_count) VALUES (?, ?, ?, ?)",
+                (entity_id, run_id, label, row_count)
+            )
         self.conn.commit()
 
     def get(self, run_id: str) -> dict | None:
@@ -53,5 +65,14 @@ class ProvenanceStore:
     def list_runs(self) -> list[dict]:
         cursor = self.conn.execute(
             "SELECT run_id, created_at FROM provenance_runs ORDER BY created_at DESC"
+        )
+        return [{'run_id': r[0], 'created_at': r[1]} for r in cursor.fetchall()]
+
+    def query_by_date_range(self, start: str, end: str) -> list[dict]:
+        """Return all runs whose created_at falls within [start, end] (ISO strings)."""
+        cursor = self.conn.execute(
+            "SELECT run_id, created_at FROM provenance_runs "
+            "WHERE created_at >= ? AND created_at <= ? ORDER BY created_at DESC",
+            (start, end)
         )
         return [{'run_id': r[0], 'created_at': r[1]} for r in cursor.fetchall()]
