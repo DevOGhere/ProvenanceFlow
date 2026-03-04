@@ -139,3 +139,42 @@ def test_validator_warning_summary():
     results = v.validate(df)
     summary = v.warning_summary(results)
     assert 'null_check' in summary
+
+
+# --- boundary / edge-case tests ---
+
+def test_null_check_exactly_3_nulls_is_warning():
+    """Exactly 3 missing monthly values → warning, not hard_rejection."""
+    results = check_null_values(make_row(nulls=['Jan', 'Feb', 'Mar']), 0)
+    assert len(results) == 1
+    assert results[0].severity == 'warning'
+
+
+def test_completeness_exactly_3_nulls_passes():
+    """≤3 missing values → completeness_check passes (returns nothing)."""
+    assert check_completeness(make_row(nulls=['Jan', 'Feb', 'Mar']), 0) == []
+
+
+def test_completeness_exactly_4_nulls_hard_rejection():
+    """4 missing values is the boundary that triggers hard_rejection."""
+    results = check_completeness(make_row(nulls=['Jan', 'Feb', 'Mar', 'Apr']), 0)
+    assert len(results) == 1
+    assert results[0].severity == 'hard_rejection'
+
+
+def test_range_check_exactly_at_bounds_passes():
+    """-3.0 and +3.0 are within range and should not be flagged."""
+    assert check_temperature_range(make_row(annual=-3.0), 0) == []
+    assert check_temperature_range(make_row(annual=3.0), 0) == []
+
+
+def test_baseline_integrity_missing_monthly_within_baseline():
+    """Full 30-year baseline present, but one year has a NaN monthly value → warning."""
+    rows = [make_row(year=y) for y in range(1951, 1981)]  # 30 complete rows
+    df = pd.DataFrame(rows)
+    # Inject a missing monthly value inside the baseline
+    df.loc[df['Year'] == 1960, 'Jun'] = float('nan')
+    results = check_baseline_integrity(df)
+    assert len(results) == 1
+    assert results[0].rule_name == 'baseline_integrity'
+    assert '1960' in results[0].reason
