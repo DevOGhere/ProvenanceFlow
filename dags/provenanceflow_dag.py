@@ -1,3 +1,4 @@
+import ast
 from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.operators.python import PythonOperator
@@ -61,8 +62,8 @@ def task_track_provenance(**context):
         input_entity=raw_entity,
         rows_in=rows_in,
         rows_passed=rows_passed,
-        rejections=eval(rejections) if rejections else {},
-        warnings=eval(warnings) if warnings else {},
+        rejections=ast.literal_eval(rejections) if rejections else {},
+        warnings=ast.literal_eval(warnings) if warnings else {},
     )
     run_id = tracker.finalize(store)
     print(f"Provenance tracked. Run ID: {run_id}")
@@ -72,7 +73,7 @@ with DAG(
     dag_id='provenanceflow_gistemp_pipeline',
     default_args=default_args,
     description='FAIR-compliant data lineage tracking for NASA GISTEMP',
-    schedule_interval=timedelta(weeks=1),
+    schedule=timedelta(weeks=1),
     start_date=datetime(2025, 1, 1),
     catchup=False,
     tags=['provenanceflow', 'fair', 'climate-science'],

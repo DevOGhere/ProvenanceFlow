@@ -59,7 +59,8 @@ class ProvenanceTracker:
 
     def track_validation(self, input_entity: prov.ProvEntity,
                          rows_in: int, rows_passed: int,
-                         rejections: dict, warnings: dict) -> prov.ProvEntity:
+                         rejections: dict, warnings: dict,
+                         rules_applied: list[str] | None = None) -> prov.ProvEntity:
         """Record validation step with full rejection/warning breakdown."""
         output_pid = generate_pid('validated')
         rows_rejected = rows_in - rows_passed
@@ -68,7 +69,7 @@ class ProvenanceTracker:
             f'pf:validate_{uuid.uuid4().hex[:8]}',
             startTime=datetime.utcnow(),
             other_attributes={
-                'pf:rules_applied': 'null_check,range_check,completeness_check,temporal_continuity,baseline_integrity',
+                'pf:rules_applied': ','.join(rules_applied) if rules_applied else '',
                 'pf:rows_in': rows_in,
                 'pf:rows_passed': rows_passed,
                 'pf:rows_rejected': rows_rejected,
