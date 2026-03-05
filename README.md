@@ -52,6 +52,22 @@ docker compose -f docker/docker-compose.yaml up -d
 docker compose -f docker/docker-compose.yaml down
 ```
 
+## Dashboard
+
+```bash
+# Populate the provenance store first (if not already done)
+python demo.py
+
+# Launch the dashboard
+streamlit run dashboard.py
+# Opens at http://localhost:8501
+```
+
+Three views:
+- **Overview** — all pipeline runs, rejection rates, row counts
+- **Run Detail** — per-run validation stats, DC/Schema.org metadata, bar charts by rule, raw PROV-JSON
+- **PROV Graph** — visual W3C PROV entity-activity-agent graph rendered with pydot
+
 ## Architecture
 
 ```
