@@ -31,6 +31,27 @@ pip install -r requirements.txt
 python demo.py
 ```
 
+## Running with Apache Airflow (Layer 2)
+
+Requires Docker Desktop with ≥ 4 GB RAM.
+
+```bash
+# 1. Set your user ID so Airflow writes files with correct ownership
+echo "AIRFLOW_UID=$(id -u)" > docker/.env
+
+# 2. Initialise (first time only — creates DB and admin user)
+docker compose -f docker/docker-compose.yaml up airflow-init
+
+# 3. Start webserver + scheduler
+docker compose -f docker/docker-compose.yaml up -d
+
+# 4. Open http://localhost:8080  (airflow / airflow)
+#    The 'provenanceflow_gistemp_pipeline' DAG will appear automatically.
+
+# Stop
+docker compose -f docker/docker-compose.yaml down
+```
+
 ## Architecture
 
 ```
