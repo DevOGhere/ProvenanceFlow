@@ -238,3 +238,47 @@ def test_prov_rules_applied_reflects_actual_rules(tmp_store, tmp_csv):
     assert 'range_check' in rules_str
     # Should NOT contain rules that were not passed
     assert 'temporal_continuity' not in rules_str
+
+
+# ── Dublin Core / Schema.org metadata tests ─────────────────────────────────
+
+def test_prov_entity_has_dc_title(tmp_store, tmp_csv):
+    """Ingestion entity must carry a Dublin Core dc:title."""
+    t = ProvenanceTracker()
+    t.track_ingestion('https://example.com/data.csv', tmp_csv, 10)
+    t.finalize(tmp_store)
+    doc = tmp_store.get(t.run_id)
+    attrs = _get_ingestion_entity(doc)
+    assert 'dc:title' in attrs
+    assert 'GISTEMP' in attrs['dc:title']
+
+
+def test_prov_entity_has_schema_url(tmp_store, tmp_csv):
+    """Ingestion entity must carry a Schema.org schema:url matching the source URL."""
+    url = 'https://example.com/data.csv'
+    t = ProvenanceTracker()
+    t.track_ingestion(url, tmp_csv, 10)
+    t.finalize(tmp_store)
+    doc = tmp_store.get(t.run_id)
+    attrs = _get_ingestion_entity(doc)
+    assert 'schema:url' in attrs
+    assert attrs['schema:url'] == url
+
+
+def test_prov_validated_entity_has_dc_is_version_of(tmp_store, tmp_csv):
+    """Validated entity must reference the raw source via dc:isVersionOf."""
+    t = ProvenanceTracker()
+    raw = t.track_ingestion('https://example.com/data.csv', tmp_csv, 10)
+    t.track_validation(raw, rows_in=10, rows_passed=9,
+                       rejections={}, warnings={},
+                       rules_applied=['null_check'])
+    t.finalize(tmp_store)
+    doc = tmp_store.get(t.run_id)
+    # Find the validated entity
+    validated_attrs = None
+    for eid, attrs in doc['entity'].items():
+        if 'validated_' in eid:
+            validated_attrs = attrs
+            break
+    assert validated_attrs is not None
+    assert 'dc:isVersionOf' in validated_attrs
