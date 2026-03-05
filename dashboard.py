@@ -153,7 +153,7 @@ def _build_prov_graph(doc: dict) -> bytes | None:
                     color=color, fontname='Helvetica',
                 ))
 
-    _add_edges('wasGeneratedBy',   'prov:entity',   'prov:activity', 'wasGeneratedBy', '#27AE60')
+    _add_edges('wasGeneratedBy',   'prov:activity', 'prov:entity',   'wasGeneratedBy', '#27AE60')
     _add_edges('used',             'prov:activity',  'prov:entity',  'used',            '#4A90D9')
     _add_edges('wasDerivedFrom',   'prov:generatedEntity', 'prov:usedEntity', 'wasDerivedFrom', '#8E44AD')
     _add_edges('wasAssociatedWith','prov:activity',  'prov:agent',   'wasAssociatedWith','#95A5A6')

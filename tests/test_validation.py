@@ -168,6 +168,18 @@ def test_range_check_exactly_at_bounds_passes():
     assert check_temperature_range(make_row(annual=3.0), 0) == []
 
 
+def test_validator_get_clean_with_zero_rejections():
+    """get_clean() on a fully clean DataFrame must return all rows unchanged."""
+    df = pd.DataFrame([make_row(year=y) for y in range(1990, 1995)])
+    v = Validator()
+    results = v.validate(df)
+    # Ensure no hard rejections in this clean fixture
+    rejections = [r for r in results if r.severity == 'hard_rejection']
+    assert rejections == []
+    clean = v.get_clean(df, results)
+    assert len(clean) == len(df)
+
+
 def test_baseline_integrity_missing_monthly_within_baseline():
     """Full 30-year baseline present, but one year has a NaN monthly value → warning."""
     rows = [make_row(year=y) for y in range(1951, 1981)]  # 30 complete rows

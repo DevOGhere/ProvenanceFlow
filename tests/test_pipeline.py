@@ -2,6 +2,7 @@
 Integration test for the full pipeline using local fixture data.
 No network calls — download_gistemp is patched to use parse_gistemp directly.
 """
+import ast
 import textwrap
 import pytest
 from unittest.mock import patch
@@ -74,3 +75,25 @@ def test_pipeline_list_runs(fixture_csv, tmp_db):
     store = ProvenanceStore(db_path=tmp_db)
     runs = store.list_runs()
     assert len(runs) == 2
+
+
+def _get_validate_activity(doc):
+    for aid, attrs in doc.get('activity', {}).items():
+        if 'validate_' in aid:
+            return attrs
+    return {}
+
+
+def test_pipeline_rejections_by_rule_parseable(fixture_csv, tmp_db):
+    """pf:rejections_by_rule must be parseable by ast.literal_eval (dashboard dependency)."""
+    with patch('src.provenanceflow.pipeline.runner.download_gistemp',
+               side_effect=lambda url, path: parse_gistemp(fixture_csv)):
+        run_id = run_pipeline('https://example.com/data.csv', fixture_csv, db_path=tmp_db)
+
+    store = ProvenanceStore(db_path=tmp_db)
+    doc = store.get(run_id)
+    val = _get_validate_activity(doc)
+    rejections_str = val.get('pf:rejections_by_rule', '{}')
+    warnings_str = val.get('pf:warnings_by_rule', '{}')
+    assert isinstance(ast.literal_eval(rejections_str), dict)
+    assert isinstance(ast.literal_eval(warnings_str), dict)

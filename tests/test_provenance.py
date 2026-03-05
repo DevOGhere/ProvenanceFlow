@@ -282,3 +282,22 @@ def test_prov_validated_entity_has_dc_is_version_of(tmp_store, tmp_csv):
             break
     assert validated_attrs is not None
     assert 'dc:isVersionOf' in validated_attrs
+
+
+def test_store_entities_table_populated(tmp_store, tmp_csv):
+    """After save(), the entities SQL table must have a row for each PROV entity."""
+    t = ProvenanceTracker()
+    raw = t.track_ingestion('https://example.com/data.csv', tmp_csv, 7)
+    t.track_validation(raw, rows_in=7, rows_passed=6,
+                       rejections={}, warnings={},
+                       rules_applied=['null_check'])
+    t.finalize(tmp_store)
+    cursor = tmp_store.conn.execute(
+        "SELECT entity_id, row_count FROM entities WHERE run_id = ?", (t.run_id,)
+    )
+    rows = cursor.fetchall()
+    # Must have at least 2 entities: raw dataset + validated output
+    assert len(rows) >= 2
+    entity_ids = [r[0] for r in rows]
+    assert any('dataset_' in eid for eid in entity_ids)
+    assert any('validated_' in eid for eid in entity_ids)
