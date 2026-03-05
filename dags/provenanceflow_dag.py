@@ -30,6 +30,7 @@ def task_ingest(**context):
 
 def task_validate(**context):
     import pandas as pd
+    from pathlib import Path
     df = pd.read_csv(LOCAL_PATH, skiprows=1, na_values=['****'])
     df = df[pd.to_numeric(df['Year'], errors='coerce').notna()].copy()
     validator = Validator()
@@ -39,6 +40,7 @@ def task_validate(**context):
     context['ti'].xcom_push(key='rows_rejected', value=len(df) - len(clean_df))
     context['ti'].xcom_push(key='rejections', value=str(validator.rejection_summary(results)))
     context['ti'].xcom_push(key='warnings', value=str(validator.warning_summary(results)))
+    Path('/opt/airflow/data/processed').mkdir(parents=True, exist_ok=True)
     clean_df.to_csv('/opt/airflow/data/processed/gistemp_clean.csv', index=False)
     print(f"Validation complete: {len(clean_df)}/{len(df)} rows passed")
 
