@@ -1,7 +1,10 @@
-data/raw/
-data/processed/
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
 provenance_store/
 __pycache__/
 *.pyc
 *.egg-info/
 .env
+!docker/.env
