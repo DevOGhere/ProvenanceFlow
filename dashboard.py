@@ -300,13 +300,14 @@ def _page_run_detail(store: ProvenanceStore, run_id: str):
 
     # Rules applied pills
     rules_raw = val.get('pf:rules_applied', '')
-    if rules_raw:
+    rules = [r.strip() for r in rules_raw.split(',') if r.strip()]
+    if rules:
         st.markdown('**Rules Applied:**')
-        cols = st.columns(min(len(rules_raw.split(',')), 5))
-        for i, rule in enumerate(rules_raw.split(',')):
+        cols = st.columns(min(len(rules), 5))
+        for i, rule in enumerate(rules):
             cols[i % len(cols)].markdown(
                 f'<span style="background:#4A90D9;color:white;padding:3px 8px;'
-                f'border-radius:12px;font-size:0.8em">{rule.strip()}</span>',
+                f'border-radius:12px;font-size:0.8em">{rule}</span>',
                 unsafe_allow_html=True,
             )
 
