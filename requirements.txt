@@ -8,3 +8,4 @@ pydot==2.0.0
 graphviz==0.20.3
 pytest==8.3.2
 apache-airflow==2.10.1
+streamlit==1.43.0
