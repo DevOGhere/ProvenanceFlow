@@ -64,6 +64,7 @@ def task_track_provenance(**context):
         rows_passed=rows_passed,
         rejections=ast.literal_eval(rejections) if rejections else {},
         warnings=ast.literal_eval(warnings) if warnings else {},
+        rules_applied=Validator.RULE_NAMES,
     )
     run_id = tracker.finalize(store)
     print(f"Provenance tracked. Run ID: {run_id}")

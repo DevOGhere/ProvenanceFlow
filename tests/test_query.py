@@ -75,6 +75,14 @@ def test_query_by_dataset_id_missing_returns_empty(tmp_store, tmp_csv):
     assert results == []
 
 
+def test_query_by_date_range_excludes_past_runs(tmp_store, tmp_csv):
+    """Runs created NOW must not appear when querying a range ending in the past."""
+    _make_run(tmp_store, tmp_csv)
+    # Query a window that definitively ended before this test ran
+    runs = get_by_date_range(tmp_store, start='2000-01-01', end='2000-12-31')
+    assert runs == []
+
+
 def test_query_by_dataset_id_multiple_runs(tmp_store, tmp_csv):
     """Multiple runs should not bleed into each other's dataset_id lookup."""
     run_id1, fair_id1 = _make_run(tmp_store, tmp_csv)

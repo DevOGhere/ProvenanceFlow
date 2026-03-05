@@ -19,7 +19,7 @@ class ValidationResult:
 
 def check_null_values(row, row_index: int) -> list[ValidationResult]:
     """Flag rows where monthly temperature values are NaN."""
-    null_cols = [c for c in MONTHLY_COLS if pd.isna(row[c])]
+    null_cols = [c for c in MONTHLY_COLS if pd.isna(row.get(c))]
     if not null_cols:
         return []
     severity = 'hard_rejection' if len(null_cols) > 3 else 'warning'
@@ -52,7 +52,7 @@ def check_temperature_range(row, row_index: int,
 
 def check_completeness(row, row_index: int, max_missing: int = 3) -> list[ValidationResult]:
     """Hard-reject rows with more than max_missing monthly values absent."""
-    null_cols = [c for c in MONTHLY_COLS if pd.isna(row[c])]
+    null_cols = [c for c in MONTHLY_COLS if pd.isna(row.get(c))]
     if len(null_cols) <= max_missing:
         return []
     return [ValidationResult(
@@ -100,7 +100,7 @@ def check_baseline_integrity(df: pd.DataFrame,
         )]
     incomplete = []
     for _, row in baseline.iterrows():
-        missing = [c for c in MONTHLY_COLS if pd.isna(row[c])]
+        missing = [c for c in MONTHLY_COLS if pd.isna(row.get(c))]
         if missing:
             incomplete.append(int(row['Year']))
     if incomplete:

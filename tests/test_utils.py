@@ -36,3 +36,9 @@ def test_sha256_file_deterministic():
         assert sha256_file(tmp) == sha256_file(tmp)
     finally:
         os.unlink(tmp)
+
+
+def test_sha256_file_nonexistent_raises_file_not_found_error():
+    import pytest
+    with pytest.raises(FileNotFoundError):
+        sha256_file('/nonexistent/path/that/does/not/exist.csv')
