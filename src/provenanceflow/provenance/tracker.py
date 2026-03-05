@@ -22,6 +22,8 @@ class ProvenanceTracker:
         self.doc.set_default_namespace('http://provenanceflow.org/')
         self.doc.add_namespace('pf', 'http://provenanceflow.org/ns#')
         self.doc.add_namespace('fair', 'http://provenanceflow.org/fair#')
+        self.doc.add_namespace('dc', 'http://purl.org/dc/terms/')
+        self.doc.add_namespace('schema', 'https://schema.org/')
         self._pipeline_agent = self._register_agent()
 
     def _register_agent(self) -> prov.ProvAgent:
@@ -38,6 +40,7 @@ class ProvenanceTracker:
                         row_count: int) -> prov.ProvEntity:
         """Record that a dataset was downloaded from source_url."""
         dataset_pid = generate_pid('dataset')
+        ingest_ts = datetime.utcnow().isoformat()
         entity = self.doc.entity(
             f'pf:dataset_{dataset_pid}',
             {
@@ -45,8 +48,20 @@ class ProvenanceTracker:
                 'fair:identifier': dataset_pid,
                 'fair:source_url': source_url,
                 'pf:row_count': row_count,
-                'pf:ingest_timestamp': datetime.utcnow().isoformat(),
+                'pf:ingest_timestamp': ingest_ts,
                 'pf:checksum_sha256': sha256_file(local_path),
+                # Dublin Core terms — interoperable with EUDAT / Zenodo / RADAR registries
+                'dc:title':      'NASA GISTEMP v4 Global Surface Temperature',
+                'dc:identifier': dataset_pid,
+                'dc:source':     source_url,
+                'dc:format':     'text/csv',
+                'dc:created':    ingest_ts,
+                'dc:type':       'Dataset',
+                'dc:license':    'https://data.giss.nasa.gov/gistemp/',
+                # Schema.org vocabulary
+                'schema:name':           'NASA GISTEMP v4',
+                'schema:url':            source_url,
+                'schema:encodingFormat': 'text/csv',
             }
         )
         activity = self.doc.activity(
@@ -85,6 +100,11 @@ class ProvenanceTracker:
                 'prov:label': 'Validated GISTEMP dataset',
                 'fair:identifier': output_pid,
                 'pf:row_count': rows_passed,
+                # Dublin Core — links validated output back to raw source
+                'dc:title':       'Validated NASA GISTEMP v4 dataset',
+                'dc:identifier':  output_pid,
+                'dc:type':        'Dataset',
+                'dc:isVersionOf': str(input_entity.identifier),
             }
         )
 
