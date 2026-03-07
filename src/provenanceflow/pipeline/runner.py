@@ -5,7 +5,6 @@ import pandas as pd
 from datetime import datetime
 
 from ..ingestion.base import DataSource
-from ..ingestion.nasa_gistemp import parse_gistemp
 from ..validation.validator import Validator
 from ..provenance.tracker import ProvenanceTracker
 from ..provenance.store import ProvenanceStore
