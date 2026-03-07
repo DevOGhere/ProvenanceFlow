@@ -93,6 +93,30 @@ def runs_list(db_path, limit):
         click.echo(f"… and {len(all_runs) - limit} more (use --limit to show more)")
 
 
+@runs.command('report')
+@click.argument('run_id')
+@click.option('--db', 'db_path', default=None, type=click.Path(),
+              help='Path to provenance SQLite DB.')
+@click.option('--output', 'output_file', default=None, type=click.Path(),
+              help='Write report to FILE instead of stdout.')
+def runs_report(run_id, db_path, output_file):
+    """Generate a Markdown reproducibility report for a run."""
+    from .utils.report import render_report
+    settings = get_settings()
+    store = ProvenanceStore(db_path=db_path or str(settings.prov_db_path))
+    try:
+        report = render_report(run_id, store)
+    except ValueError as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(1)
+
+    if output_file:
+        Path(output_file).write_text(report, encoding='utf-8')
+        click.echo(f"Report written to {output_file}")
+    else:
+        click.echo(report)
+
+
 @runs.command('show')
 @click.argument('run_id')
 @click.option('--db', 'db_path', default=None, type=click.Path(),

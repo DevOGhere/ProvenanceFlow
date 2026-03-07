@@ -97,3 +97,51 @@ def test_render_report_raises_for_unknown_run(tmp_path):
     store = ProvenanceStore(db_path=str(tmp_path / "empty.db"))
     with pytest.raises(ValueError, match="not found"):
         render_report("no-such-run", store)
+
+
+# ── rejections-by-rule table tests ───────────────────────────────────────────
+
+@pytest.fixture
+def store_with_rejections(tmp_path):
+    store = ProvenanceStore(db_path=str(tmp_path / "test2.db"))
+    store.save("run-test-rej", MINIMAL_PROV)
+    store.save_rejections("run-test-rej", [
+        {
+            "rule": "range_check",
+            "severity": "hard_rejection",
+            "message": "Annual mean 9.9°C outside range [-3.0, 3.0]",
+            "row_index": 42,
+            "row_data": '{"Year": 1999, "J-D": 9.9}',
+        },
+        {
+            "rule": "null_check",
+            "severity": "hard_rejection",
+            "message": "Missing values in columns: ['Jan', 'Feb', 'Mar', 'Apr']",
+            "row_index": 57,
+            "row_data": '{"Year": 2001, "Jan": null}',
+        },
+    ])
+    return store, "run-test-rej"
+
+
+def test_report_with_rejections_contains_table(store_with_rejections):
+    store, run_id = store_with_rejections
+    report = render_report(run_id, store)
+    assert "Rejected Rows by Rule" in report
+    assert "range_check" in report
+    assert "null_check" in report
+
+
+def test_report_with_rejections_contains_sample_rows(store_with_rejections):
+    store, run_id = store_with_rejections
+    report = render_report(run_id, store)
+    assert "Sample Rejected Rows" in report
+    assert "42" in report
+    assert "57" in report
+
+
+def test_report_no_rejections_omits_table(store_with_run):
+    store, run_id = store_with_run
+    # store_with_run does not call save_rejections
+    report = render_report(run_id, store)
+    assert "Rejected Rows by Rule" not in report

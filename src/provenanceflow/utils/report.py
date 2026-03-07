@@ -103,6 +103,36 @@ def render_report(run_id: str, store) -> str:
         f"",
     ]
 
+    # ── Rejections-by-rule table ──────────────────────────────────────────────
+    rejected_rows_data = store.get_rejections(run_id)
+
+    if rejected_rows_data:
+        rule_counts: dict[str, int] = {}
+        for rec in rejected_rows_data:
+            rule_counts[rec["rule"]] = rule_counts.get(rec["rule"], 0) + 1
+
+        lines += [
+            f"## Rejected Rows by Rule",
+            f"",
+            f"| Rule | Rejected Rows |",
+            f"|---|---:|",
+        ]
+        for rule_name, count in sorted(rule_counts.items()):
+            lines.append(f"| `{rule_name}` | {count} |")
+        lines.append("")
+
+        sample_count = min(20, len(rejected_rows_data))
+        lines += [
+            f"### Sample Rejected Rows (first {sample_count})",
+            f"",
+            f"| # | Rule | Message |",
+            f"|---|---|---|",
+        ]
+        for rec in rejected_rows_data[:20]:
+            msg = rec["message"].replace("|", "\\|")
+            lines.append(f"| {rec['row_index']} | `{rec['rule']}` | {msg} |")
+        lines.append("")
+
     if out:
         lines += [
             f"## Validated Output",

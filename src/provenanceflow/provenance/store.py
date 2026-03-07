@@ -34,6 +34,20 @@ class ProvenanceStore:
                 FOREIGN KEY (run_id) REFERENCES provenance_runs(run_id)
             )
         """)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS rejected_rows (
+                run_id      TEXT NOT NULL,
+                row_index   INTEGER,
+                rule        TEXT NOT NULL,
+                severity    TEXT NOT NULL,
+                message     TEXT NOT NULL,
+                row_data    TEXT NOT NULL,
+                FOREIGN KEY (run_id) REFERENCES provenance_runs(run_id)
+            )
+        """)
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_rejected_rows_run_id ON rejected_rows(run_id)"
+        )
         self.conn.commit()
 
     def save(self, run_id: str, prov_json: dict):
@@ -67,6 +81,58 @@ class ProvenanceStore:
             "SELECT run_id, created_at FROM provenance_runs ORDER BY created_at DESC"
         )
         return [{'run_id': r[0], 'created_at': r[1]} for r in cursor.fetchall()]
+
+    def save_rejections(self, run_id: str, rejections: list[dict]) -> None:
+        """Persist hard-rejected rows for a run.
+
+        Args:
+            run_id:     The run identifier (matches provenance_runs.run_id).
+            rejections: List of dicts with keys: rule, severity, message,
+                        row_index, row_data (JSON string).
+        """
+        self.conn.execute(
+            "DELETE FROM rejected_rows WHERE run_id = ?", (run_id,)
+        )
+        self.conn.executemany(
+            "INSERT INTO rejected_rows "
+            "(run_id, row_index, rule, severity, message, row_data) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    run_id,
+                    r.get("row_index"),
+                    r["rule"],
+                    r["severity"],
+                    r["message"],
+                    r["row_data"],
+                )
+                for r in rejections
+            ],
+        )
+        self.conn.commit()
+
+    def get_rejections(self, run_id: str) -> list[dict]:
+        """Retrieve all hard-rejected rows for a run.
+
+        Returns:
+            List of dicts with keys: row_index, rule, severity, message,
+            row_data.  Empty list if run_id not found.
+        """
+        cursor = self.conn.execute(
+            "SELECT row_index, rule, severity, message, row_data "
+            "FROM rejected_rows WHERE run_id = ? ORDER BY row_index",
+            (run_id,),
+        )
+        return [
+            {
+                "row_index": row[0],
+                "rule":      row[1],
+                "severity":  row[2],
+                "message":   row[3],
+                "row_data":  row[4],
+            }
+            for row in cursor.fetchall()
+        ]
 
     def query_by_date_range(self, start: str, end: str) -> list[dict]:
         """Return all runs whose created_at falls within [start, end] (ISO strings)."""

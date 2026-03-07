@@ -5,7 +5,7 @@ import pandas as pd
 from datetime import datetime
 
 from ..ingestion.base import DataSource
-from ..validation.validator import Validator
+from ..validation.validator import Validator, collect_rejected_rows
 from ..provenance.tracker import ProvenanceTracker
 from ..provenance.store import ProvenanceStore
 from ..models import IngestionResult, ValidationResult, ProvenanceRecord, PipelineResult
@@ -62,6 +62,7 @@ def run_pipeline(source: DataSource,
             validator = BasicValidator()
 
     results = validator.validate(df)
+    rejected_rows = collect_rejected_rows(df, results)
     clean_df = validator.get_clean(df, results)
     rejections = validator.rejection_summary(results)
     warnings_dict = validator.warning_summary(results)
@@ -78,6 +79,7 @@ def run_pipeline(source: DataSource,
 
     # Step 5: Finalize provenance
     run_id = tracker.finalize(store)
+    store.save_rejections(run_id, rejected_rows)
 
     # Step 6: Build typed result models from stored PROV doc
     prov_doc = store.get(run_id)
