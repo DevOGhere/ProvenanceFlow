@@ -25,6 +25,10 @@ x-airflow-common: &airflow-common
     AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
     AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
     PYTHONPATH: /opt/airflow
+    # ProvenanceFlow path overrides (read by get_settings() in config.py)
+    RAW_DATA_PATH: /opt/airflow/data/raw
+    PROCESSED_DATA_PATH: /opt/airflow/data/processed
+    PROV_DB_PATH: /opt/airflow/provenance_store/lineage.db
   volumes:
     # DAGs from this repo
     - ../dags:/opt/airflow/dags

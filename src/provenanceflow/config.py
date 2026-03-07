@@ -44,3 +44,16 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """Return a cached Settings singleton. Override env vars before first call."""
     return Settings()
+
+
+def configure_logging(level: str | None = None) -> None:
+    """Configure stdlib logging with a structured format.
+
+    Uses get_settings().log_level unless an explicit level is passed.
+    Call once at application startup (CLI entry point, Airflow tasks).
+    """
+    import logging
+    logging.basicConfig(
+        format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+        level=getattr(logging, (level or get_settings().log_level).upper(), logging.INFO),
+    )

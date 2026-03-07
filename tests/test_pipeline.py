@@ -1,15 +1,14 @@
 """
 Integration test for the full pipeline using local fixture data.
-No network calls — download_gistemp is patched to use parse_gistemp directly.
+Uses LocalCSVSource — no HTTP mocking or network calls needed.
 """
 import ast
 import textwrap
 import pytest
-from unittest.mock import patch
 
 from src.provenanceflow.pipeline.runner import run_pipeline
 from src.provenanceflow.provenance.store import ProvenanceStore
-from src.provenanceflow.ingestion.nasa_gistemp import parse_gistemp
+from src.provenanceflow.ingestion.local_csv import LocalCSVSource
 from src.provenanceflow.models import PipelineResult
 
 
@@ -35,17 +34,13 @@ def tmp_db(tmp_path):
 
 
 def test_pipeline_returns_run_id(fixture_csv, tmp_db):
-    with patch('src.provenanceflow.pipeline.runner.download_gistemp',
-               side_effect=lambda url, path: parse_gistemp(fixture_csv)):
-        result = run_pipeline('https://example.com/data.csv', fixture_csv, db_path=tmp_db)
+    result = run_pipeline(LocalCSVSource(fixture_csv), db_path=tmp_db)
     assert isinstance(result, PipelineResult)
     assert result.run_id.startswith('run_')
 
 
 def test_pipeline_provenance_stored(fixture_csv, tmp_db):
-    with patch('src.provenanceflow.pipeline.runner.download_gistemp',
-               side_effect=lambda url, path: parse_gistemp(fixture_csv)):
-        result = run_pipeline('https://example.com/data.csv', fixture_csv, db_path=tmp_db)
+    result = run_pipeline(LocalCSVSource(fixture_csv), db_path=tmp_db)
 
     store = ProvenanceStore(db_path=tmp_db)
     doc = store.get(result.run_id)
@@ -56,9 +51,7 @@ def test_pipeline_provenance_stored(fixture_csv, tmp_db):
 
 
 def test_pipeline_prov_has_lineage_relationships(fixture_csv, tmp_db):
-    with patch('src.provenanceflow.pipeline.runner.download_gistemp',
-               side_effect=lambda url, path: parse_gistemp(fixture_csv)):
-        result = run_pipeline('https://example.com/data.csv', fixture_csv, db_path=tmp_db)
+    result = run_pipeline(LocalCSVSource(fixture_csv), db_path=tmp_db)
 
     store = ProvenanceStore(db_path=tmp_db)
     doc = store.get(result.run_id)
@@ -68,10 +61,8 @@ def test_pipeline_prov_has_lineage_relationships(fixture_csv, tmp_db):
 
 
 def test_pipeline_list_runs(fixture_csv, tmp_db):
-    with patch('src.provenanceflow.pipeline.runner.download_gistemp',
-               side_effect=lambda url, path: parse_gistemp(fixture_csv)):
-        run_pipeline('https://example.com/data.csv', fixture_csv, db_path=tmp_db)
-        run_pipeline('https://example.com/data.csv', fixture_csv, db_path=tmp_db)
+    run_pipeline(LocalCSVSource(fixture_csv), db_path=tmp_db)
+    run_pipeline(LocalCSVSource(fixture_csv), db_path=tmp_db)
 
     store = ProvenanceStore(db_path=tmp_db)
     runs = store.list_runs()
@@ -87,9 +78,7 @@ def _get_validate_activity(doc):
 
 def test_pipeline_rejections_by_rule_parseable(fixture_csv, tmp_db):
     """pf:rejections_by_rule must be parseable by ast.literal_eval (dashboard dependency)."""
-    with patch('src.provenanceflow.pipeline.runner.download_gistemp',
-               side_effect=lambda url, path: parse_gistemp(fixture_csv)):
-        result = run_pipeline('https://example.com/data.csv', fixture_csv, db_path=tmp_db)
+    result = run_pipeline(LocalCSVSource(fixture_csv), db_path=tmp_db)
 
     store = ProvenanceStore(db_path=tmp_db)
     doc = store.get(result.run_id)
@@ -102,17 +91,13 @@ def test_pipeline_rejections_by_rule_parseable(fixture_csv, tmp_db):
 
 def test_pipeline_result_has_typed_ingestion(fixture_csv, tmp_db):
     """PipelineResult.ingestion must carry row_count and checksum."""
-    with patch('src.provenanceflow.pipeline.runner.download_gistemp',
-               side_effect=lambda url, path: parse_gistemp(fixture_csv)):
-        result = run_pipeline('https://example.com/data.csv', fixture_csv, db_path=tmp_db)
+    result = run_pipeline(LocalCSVSource(fixture_csv), db_path=tmp_db)
     assert result.ingestion.row_count == 3
     assert len(result.ingestion.checksum_sha256) == 64
 
 
 def test_pipeline_result_has_typed_validation(fixture_csv, tmp_db):
     """PipelineResult.validation must carry rows_in and rejection_rate."""
-    with patch('src.provenanceflow.pipeline.runner.download_gistemp',
-               side_effect=lambda url, path: parse_gistemp(fixture_csv)):
-        result = run_pipeline('https://example.com/data.csv', fixture_csv, db_path=tmp_db)
+    result = run_pipeline(LocalCSVSource(fixture_csv), db_path=tmp_db)
     assert result.validation.rows_in == 3
     assert 0.0 <= result.validation.rejection_rate <= 1.0

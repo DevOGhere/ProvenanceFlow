@@ -1,18 +1,27 @@
-import ast
+import logging
 from datetime import datetime, timedelta
+from pathlib import Path
+
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 import sys
 sys.path.insert(0, '/opt/airflow')
 
-from src.provenanceflow.ingestion.nasa_gistemp import download_gistemp
+from src.provenanceflow.config import get_settings, configure_logging
+from src.provenanceflow.ingestion.nasa_gistemp import NASAGISTEMPSource, parse_gistemp
 from src.provenanceflow.validation.validator import Validator
 from src.provenanceflow.provenance.tracker import ProvenanceTracker
 from src.provenanceflow.provenance.store import ProvenanceStore
 
-NASA_URL = 'https://data.giss.nasa.gov/gistemp/tabledata_v4/GLB.Ts+dSST.csv'
-LOCAL_PATH = '/opt/airflow/data/raw/gistemp_global.csv'
-DB_PATH = '/opt/airflow/provenance_store/lineage.db'
+configure_logging()
+logger = logging.getLogger(__name__)
+
+# Paths driven by environment variables via get_settings().
+# In Docker, docker-compose sets RAW_DATA_PATH, PROCESSED_DATA_PATH, PROV_DB_PATH.
+_s = get_settings()
+NASA_URL   = str(_s.gistemp_url)
+LOCAL_PATH = str(_s.raw_data_path / 'gistemp_global.csv')
+DB_PATH    = str(_s.prov_db_path)
 
 default_args = {
     'owner': 'provenanceflow',
@@ -23,16 +32,14 @@ default_args = {
 
 
 def task_ingest(**context):
-    df = download_gistemp(NASA_URL, LOCAL_PATH)
-    context['ti'].xcom_push(key='row_count', value=len(df))
-    print(f"Ingested {len(df)} rows from NASA GISTEMP")
+    source = NASAGISTEMPSource(url=NASA_URL, output_dir=Path(LOCAL_PATH).parent)
+    ingestion = source.fetch()
+    context['ti'].xcom_push(key='row_count', value=ingestion.row_count)
+    logger.info("Ingested %d rows from NASA GISTEMP", ingestion.row_count)
 
 
 def task_validate(**context):
-    import pandas as pd
-    from pathlib import Path
-    df = pd.read_csv(LOCAL_PATH, skiprows=1, na_values=['****'])
-    df = df[pd.to_numeric(df['Year'], errors='coerce').notna()].copy()
+    df = parse_gistemp(LOCAL_PATH)
     validator = Validator()
     results = validator.validate(df)
     clean_df = validator.get_clean(df, results)
@@ -40,12 +47,13 @@ def task_validate(**context):
     context['ti'].xcom_push(key='rows_rejected', value=len(df) - len(clean_df))
     context['ti'].xcom_push(key='rejections', value=str(validator.rejection_summary(results)))
     context['ti'].xcom_push(key='warnings', value=str(validator.warning_summary(results)))
-    Path('/opt/airflow/data/processed').mkdir(parents=True, exist_ok=True)
-    clean_df.to_csv('/opt/airflow/data/processed/gistemp_clean.csv', index=False)
-    print(f"Validation complete: {len(clean_df)}/{len(df)} rows passed")
+    Path(_s.processed_data_path).mkdir(parents=True, exist_ok=True)
+    clean_df.to_csv(_s.processed_data_path / 'gistemp_clean.csv', index=False)
+    logger.info("Validation complete: %d/%d rows passed", len(clean_df), len(df))
 
 
 def task_track_provenance(**context):
+    import ast
     ti = context['ti']
     rows_in = ti.xcom_pull(key='row_count', task_ids='ingest')
     rows_passed = ti.xcom_pull(key='rows_passed', task_ids='validate')
@@ -69,7 +77,7 @@ def task_track_provenance(**context):
         rules_applied=Validator.RULE_NAMES,
     )
     run_id = tracker.finalize(store)
-    print(f"Provenance tracked. Run ID: {run_id}")
+    logger.info("Provenance tracked. run_id=%s", run_id)
 
 
 with DAG(

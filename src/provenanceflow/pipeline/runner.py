@@ -1,33 +1,42 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from pathlib import Path
 
-from ..ingestion.nasa_gistemp import download_gistemp
+from ..ingestion.base import DataSource
+from ..ingestion.nasa_gistemp import parse_gistemp
 from ..validation.validator import Validator
 from ..provenance.tracker import ProvenanceTracker
 from ..provenance.store import ProvenanceStore
 from ..models import IngestionResult, ValidationResult, ProvenanceRecord, PipelineResult
-from ..utils.checksums import sha256_file
+from ..utils.prov_helpers import unwrap, get_ingestion_entity
+
+logger = logging.getLogger(__name__)
 
 
-def run_pipeline(
-    source_url: str,
-    local_path: str,
-    db_path: str = 'provenance_store/lineage.db',
-) -> PipelineResult:
+def run_pipeline(source: DataSource,
+                 db_path: str = 'provenance_store/lineage.db') -> PipelineResult:
     """
-    Full pipeline: download → validate → track provenance → store.
-    Returns a typed PipelineResult containing ingestion, validation, and provenance data.
+    Full pipeline: fetch → validate → track provenance → store.
+
+    Args:
+        source: Any DataSource implementation (NASAGISTEMPSource, LocalCSVSource, …)
+        db_path: Path to the SQLite provenance store.
+
+    Returns:
+        PipelineResult with typed ingestion, validation, and provenance data.
     """
     store = ProvenanceStore(db_path=db_path)
     tracker = ProvenanceTracker()
 
-    # Step 1: Ingest
-    df = download_gistemp(source_url, local_path)
+    # Step 1: Ingest via DataSource
+    ingestion = source.fetch()
+    df = parse_gistemp(str(ingestion.local_path))
+
     raw_entity = tracker.track_ingestion(
-        source_url=source_url,
-        local_path=local_path,
+        source_url=ingestion.source_url,
+        local_path=str(ingestion.local_path),
         row_count=len(df),
     )
 
@@ -52,28 +61,22 @@ def run_pipeline(
 
     # Step 4: Build typed result models from stored PROV doc
     prov_doc = store.get(run_id)
-
-    # Extract dataset_pid from the PROV entity the tracker recorded
-    dataset_pid = ''
-    for eid, attrs in prov_doc.get('entity', {}).items():
-        if 'dataset_' in eid:
-            raw_fid = attrs.get('fair:identifier', '')
-            dataset_pid = raw_fid['$'] if isinstance(raw_fid, dict) else str(raw_fid)
-            break
+    _, ing_attrs = get_ingestion_entity(prov_doc)
+    dataset_pid = str(unwrap(ing_attrs.get('fair:identifier', '')))
 
     rows_in = len(df)
     rows_rejected = rows_in - len(clean_df)
 
-    ingestion = IngestionResult(
-        source_url=source_url,
-        local_path=Path(local_path),
+    ingestion_result = IngestionResult(
+        source_url=ingestion.source_url,
+        local_path=ingestion.local_path,
         row_count=rows_in,
-        checksum_sha256=sha256_file(local_path),
+        checksum_sha256=ingestion.checksum_sha256,
         dataset_pid=dataset_pid,
-        ingest_timestamp=datetime.utcnow(),
+        ingest_timestamp=ingestion.ingest_timestamp,
     )
 
-    validation = ValidationResult(
+    validation_result = ValidationResult(
         rows_in=rows_in,
         rows_passed=len(clean_df),
         rows_rejected=rows_rejected,
@@ -90,16 +93,19 @@ def run_pipeline(
         summary={
             'rows_in': rows_in,
             'rows_passed': len(clean_df),
-            'rejection_rate': validation.rejection_rate,
+            'rejection_rate': validation_result.rejection_rate,
         },
     )
 
-    print(f"Pipeline complete. Run ID: {run_id}")
-    print(f"Rows in: {rows_in} | Rows passed: {len(clean_df)} | Rejected: {rows_rejected}")
+    logger.info("Pipeline complete. run_id=%s", run_id)
+    logger.info(
+        "Rows in: %d | Passed: %d | Rejected: %d",
+        rows_in, len(clean_df), rows_rejected,
+    )
 
     return PipelineResult(
         run_id=run_id,
-        ingestion=ingestion,
-        validation=validation,
+        ingestion=ingestion_result,
+        validation=validation_result,
         provenance=provenance,
     )

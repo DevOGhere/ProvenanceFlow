@@ -14,6 +14,12 @@ from src.provenanceflow.provenance.store import ProvenanceStore
 from src.provenanceflow.provenance.query import (
     get_run, list_runs, get_entities, get_activities,
 )
+from src.provenanceflow.utils.prov_helpers import (
+    unwrap as _unwrap,
+    get_ingestion_entity as _get_ingestion_entity_full,
+    get_validation_activity as _get_validation_activity_full,
+    get_validated_entity as _get_validated_entity_full,
+)
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -27,11 +33,6 @@ DB_PATH = 'provenance_store/lineage.db'
 
 # ── Data helpers ──────────────────────────────────────────────────────────────
 
-def _unwrap(v):
-    """PROV-JSON stores typed literals as {'$': value, 'type': '...'}."""
-    return v['$'] if isinstance(v, dict) and '$' in v else v
-
-
 def _parse_dict_attr(v) -> dict:
     """Activity attributes like rejections_by_rule are stored as str(dict)."""
     try:
@@ -41,24 +42,18 @@ def _parse_dict_attr(v) -> dict:
 
 
 def _get_ingestion_entity(doc: dict) -> dict:
-    for eid, attrs in doc.get('entity', {}).items():
-        if 'dataset_' in eid:
-            return attrs
-    return {}
+    _, attrs = _get_ingestion_entity_full(doc)
+    return attrs
 
 
 def _get_validation_activity(doc: dict) -> dict:
-    for aid, attrs in doc.get('activity', {}).items():
-        if 'validate_' in aid:
-            return attrs
-    return {}
+    _, attrs = _get_validation_activity_full(doc)
+    return attrs
 
 
 def _get_validated_entity(doc: dict) -> dict:
-    for eid, attrs in doc.get('entity', {}).items():
-        if 'validated_' in eid:
-            return attrs
-    return {}
+    _, attrs = _get_validated_entity_full(doc)
+    return attrs
 
 
 @st.cache_resource
