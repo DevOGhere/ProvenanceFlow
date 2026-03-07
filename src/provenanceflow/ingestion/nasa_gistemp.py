@@ -46,6 +46,18 @@ class NASAGISTEMPSource(DataSource):
     def source_id(self) -> str:
         return "nasa_gistemp"
 
+    @property
+    def dataset_title(self) -> str:
+        return "NASA GISTEMP v4 Global Surface Temperature"
+
+    @property
+    def dataset_license(self) -> str:
+        return "https://data.giss.nasa.gov/gistemp/"
+
+    @property
+    def _parse(self):
+        return parse_gistemp
+
     def fetch(self) -> IngestionResult:
         local_path = self._output_dir / "gistemp_global.csv"
         df = download_gistemp(self._url, str(local_path))

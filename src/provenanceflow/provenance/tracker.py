@@ -37,29 +37,39 @@ class ProvenanceTracker:
         )
 
     def track_ingestion(self, source_url: str, local_path: str,
-                        row_count: int) -> prov.ProvEntity:
-        """Record that a dataset was downloaded from source_url."""
+                        row_count: int,
+                        title: str = "Dataset",
+                        license: str = "Unknown") -> prov.ProvEntity:
+        """Record that a dataset was ingested from source_url.
+
+        Args:
+            source_url: URL or file URI of the data source.
+            local_path: Local filesystem path of the downloaded/read file.
+            row_count:  Number of rows in the raw dataset.
+            title:      Human-readable dataset name (for Dublin Core dc:title).
+            license:    License URI or name (for Dublin Core dc:license).
+        """
         dataset_pid = generate_pid('dataset')
         ingest_ts = datetime.utcnow().isoformat()
         entity = self.doc.entity(
             f'pf:dataset_{dataset_pid}',
             {
-                'prov:label': f'Raw dataset from {source_url}',
+                'prov:label': f'Raw dataset: {title}',
                 'fair:identifier': dataset_pid,
                 'fair:source_url': source_url,
                 'pf:row_count': row_count,
                 'pf:ingest_timestamp': ingest_ts,
                 'pf:checksum_sha256': sha256_file(local_path),
                 # Dublin Core terms — interoperable with EUDAT / Zenodo / RADAR registries
-                'dc:title':      'NASA GISTEMP v4 Global Surface Temperature',
+                'dc:title':      title,
                 'dc:identifier': dataset_pid,
                 'dc:source':     source_url,
                 'dc:format':     'text/csv',
                 'dc:created':    ingest_ts,
                 'dc:type':       'Dataset',
-                'dc:license':    'https://data.giss.nasa.gov/gistemp/',
+                'dc:license':    license,
                 # Schema.org vocabulary
-                'schema:name':           'NASA GISTEMP v4',
+                'schema:name':           title,
                 'schema:url':            source_url,
                 'schema:encodingFormat': 'text/csv',
             }
@@ -97,11 +107,11 @@ class ProvenanceTracker:
         output_entity = self.doc.entity(
             f'pf:validated_{output_pid}',
             {
-                'prov:label': 'Validated GISTEMP dataset',
+                'prov:label': 'Validated dataset',
                 'fair:identifier': output_pid,
                 'pf:row_count': rows_passed,
                 # Dublin Core — links validated output back to raw source
-                'dc:title':       'Validated NASA GISTEMP v4 dataset',
+                'dc:title':       'Validated dataset',
                 'dc:identifier':  output_pid,
                 'dc:type':        'Dataset',
                 'dc:isVersionOf': str(input_entity.identifier),
@@ -112,6 +122,57 @@ class ProvenanceTracker:
         self.doc.wasGeneratedBy(output_entity, validation_activity)
         self.doc.wasDerivedFrom(output_entity, input_entity)
         self.doc.wasAssociatedWith(validation_activity, self._pipeline_agent)
+
+        return output_entity
+
+    def track_transformation(self, input_entity: prov.ProvEntity,
+                             rows_in: int, rows_out: int,
+                             function_name: str,
+                             checksum_in: str = "",
+                             checksum_out: str = "") -> prov.ProvEntity:
+        """Record an arbitrary DataFrame transformation (used by the @track decorator).
+
+        Args:
+            input_entity:   PROV entity representing the input DataFrame.
+            rows_in:        Row count of the input DataFrame.
+            rows_out:       Row count of the output DataFrame.
+            function_name:  Qualified name of the function that ran (func.__qualname__).
+            checksum_in:    SHA-256 of the input DataFrame CSV bytes.
+            checksum_out:   SHA-256 of the output DataFrame CSV bytes.
+        """
+        output_pid = generate_pid('transformed')
+
+        transform_activity = self.doc.activity(
+            f'pf:transform_{uuid.uuid4().hex[:8]}',
+            startTime=datetime.utcnow(),
+            other_attributes={
+                'pf:function_name': function_name,
+                'pf:rows_in': rows_in,
+                'pf:rows_out': rows_out,
+                'pf:rows_removed': rows_in - rows_out,
+                'pf:checksum_in': checksum_in,
+                'pf:checksum_out': checksum_out,
+            }
+        )
+
+        output_entity = self.doc.entity(
+            f'pf:transformed_{output_pid}',
+            {
+                'prov:label': f'Output of {function_name}',
+                'fair:identifier': output_pid,
+                'pf:row_count': rows_out,
+                'pf:checksum_sha256': checksum_out,
+                'dc:title': f'Output of {function_name}',
+                'dc:identifier': output_pid,
+                'dc:type': 'Dataset',
+                'dc:isVersionOf': str(input_entity.identifier),
+            }
+        )
+
+        self.doc.used(transform_activity, input_entity)
+        self.doc.wasGeneratedBy(output_entity, transform_activity)
+        self.doc.wasDerivedFrom(output_entity, input_entity)
+        self.doc.wasAssociatedWith(transform_activity, self._pipeline_agent)
 
         return output_entity
 

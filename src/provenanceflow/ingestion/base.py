@@ -24,3 +24,24 @@ class DataSource(ABC):
     def source_id(self) -> str:
         """Stable identifier for this source type (used in PROV lineage labels)."""
         ...
+
+    # ── Optional metadata (concrete subclasses may override) ─────────────────
+
+    @property
+    def dataset_title(self) -> str:
+        """Human-readable dataset name for PROV metadata."""
+        return "Dataset"
+
+    @property
+    def dataset_license(self) -> str:
+        """License URI or name for PROV Dublin Core metadata."""
+        return "Unknown"
+
+    @property
+    def _parse(self):
+        """Optional parse function: (local_path: str) -> pd.DataFrame.
+
+        If None, runner.py falls back to pd.read_csv(local_path).
+        NASAGISTEMPSource sets this to parse_gistemp.
+        """
+        return None

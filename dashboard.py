@@ -284,6 +284,35 @@ def _page_overview(runs: list[dict]):
     df.columns = [c.replace("_", " ").title() for c in df.columns]
     st.dataframe(df, use_container_width=True, hide_index=True)
 
+    # Compare Runs panel
+    run_ids = [r["run_id"] for r in runs]
+    if len(run_ids) >= 2:
+        st.divider()
+        with st.expander("🔄 Compare Two Runs", expanded=False):
+            col_a, col_b = st.columns(2)
+            with col_a:
+                run_a = st.selectbox("Run A (baseline)", run_ids, key="cmp_a",
+                                     format_func=lambda x: x[:20] + "…")
+            with col_b:
+                run_b = st.selectbox("Run B (compare to)", run_ids,
+                                     index=1, key="cmp_b",
+                                     format_func=lambda x: x[:20] + "…")
+            if st.button("Compare", disabled=(run_a == run_b)):
+                from src.provenanceflow.provenance.compare import compare_runs
+                diff = compare_runs(run_a, run_b, store)
+                cols = st.columns(4)
+                cols[0].metric("Same Dataset", "✅ Yes" if diff.same_dataset else "❌ No")
+                cols[1].metric("Same Rules",   "✅ Yes" if diff.same_rules   else "❌ No")
+                cols[2].metric("Δ Rows Passed", f"{diff.delta_rows_passed:+,}")
+                cols[3].metric("Δ Rejection Rate",
+                               f"{diff.delta_rejection_rate * 100:+.2f}%")
+                if diff.delta_rejection_rate < 0:
+                    st.success(f"✅ {diff.summary}")
+                elif diff.delta_rejection_rate > 0:
+                    st.error(f"⚠️ {diff.summary}")
+                else:
+                    st.info(f"ℹ️ {diff.summary}")
+
 
 # ── Page: Run Detail ──────────────────────────────────────────────────────────
 

@@ -62,3 +62,16 @@ def get_activities(run_id: str, store: ProvenanceStore = Depends(_get_store)) ->
     if not activities:
         raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found or has no activities.")
     return activities
+
+
+@router.get("/{run_id_a}/compare/{run_id_b}")
+def compare(run_id_a: str, run_id_b: str,
+            store: ProvenanceStore = Depends(_get_store)) -> dict:
+    """Compare two pipeline runs and return a structured diff."""
+    import dataclasses
+    from ...provenance.compare import compare_runs
+    try:
+        diff = compare_runs(run_id_a, run_id_b, store)
+        return dataclasses.asdict(diff)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))

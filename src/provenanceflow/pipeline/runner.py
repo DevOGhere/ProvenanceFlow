@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import logging
+import pandas as pd
 from datetime import datetime
-from pathlib import Path
 
 from ..ingestion.base import DataSource
 from ..ingestion.nasa_gistemp import parse_gistemp
@@ -16,13 +16,18 @@ logger = logging.getLogger(__name__)
 
 
 def run_pipeline(source: DataSource,
-                 db_path: str = 'provenance_store/lineage.db') -> PipelineResult:
+                 db_path: str = 'provenance_store/lineage.db',
+                 validator=None) -> PipelineResult:
     """
-    Full pipeline: fetch → validate → track provenance → store.
+    Full pipeline: fetch → parse → validate → track provenance → store.
 
     Args:
-        source: Any DataSource implementation (NASAGISTEMPSource, LocalCSVSource, …)
-        db_path: Path to the SQLite provenance store.
+        source:    Any DataSource implementation (NASAGISTEMPSource, LocalCSVSource,
+                   GenericCSVSource, …).  The source determines how the file is parsed
+                   and what metadata appears in the PROV document.
+        db_path:   Path to the SQLite provenance store.
+        validator: Optional validator instance.  If None, NASAGISTEMPSource uses the
+                   domain-specific Validator; all other sources use BasicValidator.
 
     Returns:
         PipelineResult with typed ingestion, validation, and provenance data.
@@ -32,34 +37,50 @@ def run_pipeline(source: DataSource,
 
     # Step 1: Ingest via DataSource
     ingestion = source.fetch()
-    df = parse_gistemp(str(ingestion.local_path))
 
+    # Step 2: Parse — use source-specific parser or fall back to plain read_csv
+    parse_fn = getattr(source, '_parse', None)
+    if parse_fn is not None:
+        df = parse_fn(str(ingestion.local_path))
+    else:
+        df = pd.read_csv(str(ingestion.local_path))
+
+    # Step 3: Track ingestion with source-aware metadata
     raw_entity = tracker.track_ingestion(
         source_url=ingestion.source_url,
         local_path=str(ingestion.local_path),
         row_count=len(df),
+        title=getattr(source, 'dataset_title', 'Dataset'),
+        license=getattr(source, 'dataset_license', 'Unknown'),
     )
 
-    # Step 2: Validate
-    validator = Validator()
+    # Step 4: Validate — pick validator if not explicitly provided
+    if validator is None:
+        if source.source_id in ('nasa_gistemp', 'local_csv'):
+            validator = Validator()
+        else:
+            from ..validation.basic_validator import BasicValidator
+            validator = BasicValidator()
+
     results = validator.validate(df)
     clean_df = validator.get_clean(df, results)
     rejections = validator.rejection_summary(results)
-    warnings = validator.warning_summary(results)
+    warnings_dict = validator.warning_summary(results)
+    rule_names = getattr(validator, 'RULE_NAMES', [])
 
     tracker.track_validation(
         input_entity=raw_entity,
         rows_in=len(df),
         rows_passed=len(clean_df),
         rejections=rejections,
-        warnings=warnings,
-        rules_applied=Validator.RULE_NAMES,
+        warnings=warnings_dict,
+        rules_applied=rule_names,
     )
 
-    # Step 3: Finalize provenance
+    # Step 5: Finalize provenance
     run_id = tracker.finalize(store)
 
-    # Step 4: Build typed result models from stored PROV doc
+    # Step 6: Build typed result models from stored PROV doc
     prov_doc = store.get(run_id)
     _, ing_attrs = get_ingestion_entity(prov_doc)
     dataset_pid = str(unwrap(ing_attrs.get('fair:identifier', '')))
@@ -81,9 +102,9 @@ def run_pipeline(source: DataSource,
         rows_passed=len(clean_df),
         rows_rejected=rows_rejected,
         rejection_rate=round(rows_rejected / rows_in, 4) if rows_in else 0.0,
-        rules_applied=list(Validator.RULE_NAMES),
+        rules_applied=list(rule_names),
         rejections_by_rule=rejections,
-        warnings_by_rule=warnings,
+        warnings_by_rule=warnings_dict,
     )
 
     provenance = ProvenanceRecord(

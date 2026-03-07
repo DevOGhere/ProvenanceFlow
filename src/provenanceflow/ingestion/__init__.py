@@ -9,10 +9,12 @@ from __future__ import annotations
 from .base import DataSource
 from .nasa_gistemp import NASAGISTEMPSource
 from .local_csv import LocalCSVSource
+from .generic_csv import GenericCSVSource
 
 SOURCE_REGISTRY: dict[str, type[DataSource]] = {
     "nasa_gistemp": NASAGISTEMPSource,
     "local_csv": LocalCSVSource,
+    "generic_csv": GenericCSVSource,
 }
 
 
