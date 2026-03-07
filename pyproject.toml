@@ -25,6 +25,9 @@ dependencies = [
     "click>=8.0",
 ]
 
+[project.optional-dependencies]
+interactive-graph = ["pyvis>=0.3"]
+
 [project.scripts]
 provenanceflow = "provenanceflow.cli:main"
 
