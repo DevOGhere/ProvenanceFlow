@@ -55,7 +55,8 @@ def run(csv_file, url, output_dir, db_path):
     else:
         resolved_url = url or settings.gistemp_url
         resolved_dir = Path(output_dir) if output_dir else settings.raw_data_path
-        source = NASAGISTEMPSource(url=resolved_url, output_dir=resolved_dir)
+        local_path = str(resolved_dir / "gistemp.csv")
+        source = NASAGISTEMPSource(url=resolved_url, local_path=local_path)
 
     result = run_pipeline(source=source, db_path=resolved_db)
 

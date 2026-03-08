@@ -37,7 +37,10 @@ class ProvenanceTracker:
         )
 
     def track_ingestion(self, source_url: str, local_path: str,
-                        row_count: int) -> prov.ProvEntity:
+                        row_count: int,
+                        title: str = 'NASA GISTEMP v4 Global Surface Temperature',
+                        license_url: str = 'https://data.giss.nasa.gov/gistemp/',
+                        ) -> prov.ProvEntity:
         """Record that a dataset was downloaded from source_url."""
         dataset_pid = generate_pid('dataset')
         ingest_ts = datetime.utcnow().isoformat()
@@ -51,15 +54,15 @@ class ProvenanceTracker:
                 'pf:ingest_timestamp': ingest_ts,
                 'pf:checksum_sha256': sha256_file(local_path),
                 # Dublin Core terms — interoperable with EUDAT / Zenodo / RADAR registries
-                'dc:title':      'NASA GISTEMP v4 Global Surface Temperature',
+                'dc:title':      title,
                 'dc:identifier': dataset_pid,
                 'dc:source':     source_url,
                 'dc:format':     'text/csv',
                 'dc:created':    ingest_ts,
                 'dc:type':       'Dataset',
-                'dc:license':    'https://data.giss.nasa.gov/gistemp/',
+                'dc:license':    license_url,
                 # Schema.org vocabulary
-                'schema:name':           'NASA GISTEMP v4',
+                'schema:name':           title,
                 'schema:url':            source_url,
                 'schema:encodingFormat': 'text/csv',
             }
@@ -120,3 +123,44 @@ class ProvenanceTracker:
         prov_json = json.loads(self.doc.serialize(format='json'))
         store.save(self.run_id, prov_json)
         return self.run_id
+
+    def track_transformation(self, input_entity: prov.ProvEntity,
+                             rows_in: int, rows_out: int,
+                             function_name: str,
+                             checksum_in: str = '',
+                             checksum_out: str = '') -> prov.ProvEntity:
+        """Record a DataFrame transformation step (used by the @track decorator)."""
+        output_pid = generate_pid('transformed')
+
+        transform_activity = self.doc.activity(
+            f'pf:transform_{uuid.uuid4().hex[:8]}',
+            startTime=datetime.utcnow(),
+            other_attributes={
+                'pf:function_name': function_name,
+                'pf:rows_in': rows_in,
+                'pf:rows_out': rows_out,
+                'pf:checksum_in': checksum_in,
+                'pf:checksum_out': checksum_out,
+            }
+        )
+
+        output_entity = self.doc.entity(
+            f'pf:transformed_{output_pid}',
+            {
+                'prov:label': f'Output of {function_name}',
+                'fair:identifier': output_pid,
+                'pf:row_count': rows_out,
+                'pf:checksum_sha256': checksum_out,
+                'dc:title': f'Transformed dataset ({function_name})',
+                'dc:identifier': output_pid,
+                'dc:type': 'Dataset',
+                'dc:isVersionOf': str(input_entity.identifier),
+            }
+        )
+
+        self.doc.used(transform_activity, input_entity)
+        self.doc.wasGeneratedBy(output_entity, transform_activity)
+        self.doc.wasDerivedFrom(output_entity, input_entity)
+        self.doc.wasAssociatedWith(transform_activity, self._pipeline_agent)
+
+        return output_entity
