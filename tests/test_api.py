@@ -117,3 +117,99 @@ def test_search_missing_params_returns_400(client):
 def test_search_only_start_returns_400(client):
     r = client.get("/runs/search?start=2025-01-01")
     assert r.status_code == 400
+
+
+# ── GET /runs/{run_id}/rejections  &  GET /runs/{run_id}/report ──────────────
+
+_PROV_WITH_REJECTIONS = {
+    "prefix": {"pf": "http://provenanceflow.org/"},
+    "entity": {
+        "pf:dataset_x": {
+            "dc:title": "Test",
+            "fair:source_url": "http://example.com/t.csv",
+            "fair:identifier": "uuid-x",
+            "dc:format": "text/csv",
+            "dc:license": "Public Domain",
+            "pf:ingest_timestamp": "2026-03-07T10:00:00Z",
+            "pf:row_count": {"$": 100, "type": "xsd:integer"},
+            "pf:checksum_sha256": "abc123",
+        },
+    },
+    "activity": {
+        "pf:validate_x": {
+            "pf:rows_in":        {"$": 100, "type": "xsd:integer"},
+            "pf:rows_passed":    {"$": 98,  "type": "xsd:integer"},
+            "pf:rows_rejected":  {"$": 2,   "type": "xsd:integer"},
+            "pf:rejection_rate": {"$": 0.02, "type": "xsd:double"},
+            "pf:rules_applied":  "range_check",
+        },
+    },
+    "agent": {},
+    "wasGeneratedBy": {},
+    "used": {},
+    "wasDerivedFrom": {},
+    "wasAssociatedWith": {},
+}
+
+_SAMPLE_REJECTIONS = [
+    {
+        "rule": "range_check",
+        "severity": "hard_rejection",
+        "message": "Annual mean 9.9°C outside range [-3.0, 3.0]",
+        "row_index": 42,
+        "row_data": '{"Year": 1999, "J-D": 9.9}',
+    },
+    {
+        "rule": "null_check",
+        "severity": "hard_rejection",
+        "message": "Missing values in columns: ['Jan', 'Feb']",
+        "row_index": 57,
+        "row_data": '{"Year": 2001, "Jan": null}',
+    },
+]
+
+
+@pytest.fixture
+def run_with_rejections_client(tmp_path):
+    """TestClient with a run that has two saved rejections."""
+    tmp_db = str(tmp_path / "rej.db")
+    test_store = ProvenanceStore(db_path=tmp_db)
+    test_store.save("run-rej-001", _PROV_WITH_REJECTIONS)
+    test_store.save_rejections("run-rej-001", _SAMPLE_REJECTIONS)
+    app.dependency_overrides[_get_store] = lambda: test_store
+    yield TestClient(app), test_store
+    app.dependency_overrides.clear()
+
+
+def test_get_rejections_returns_list(run_with_rejections_client):
+    client, _ = run_with_rejections_client
+    r = client.get("/runs/run-rej-001/rejections")
+    assert r.status_code == 200
+    data = r.json()
+    assert len(data) == 2
+    assert data[0]["rule"] == "range_check"
+
+
+def test_get_rejections_empty_run(run_with_rejections_client):
+    client, store = run_with_rejections_client
+    store.save("run-no-rej", _PROV_WITH_REJECTIONS)
+    r = client.get("/runs/run-no-rej/rejections")
+    assert r.status_code == 200
+    assert r.json() == []
+
+
+def test_get_rejections_unknown_run_404(client):
+    r = client.get("/runs/does-not-exist/rejections")
+    assert r.status_code == 404
+
+
+def test_get_report_returns_markdown(run_with_rejections_client):
+    client, _ = run_with_rejections_client
+    r = client.get("/runs/run-rej-001/report")
+    assert r.status_code == 200
+    assert "Run ID" in r.text
+
+
+def test_get_report_unknown_run_404(client):
+    r = client.get("/runs/does-not-exist/report")
+    assert r.status_code == 404

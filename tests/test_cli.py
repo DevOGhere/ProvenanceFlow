@@ -102,3 +102,39 @@ def test_cli_runs_show_json_flag(fixture_csv, tmp_db):
     import json
     doc = json.loads(show_result.output)
     assert 'entity' in doc
+
+
+# ── provenanceflow runs report ────────────────────────────────────────────────
+
+def test_cli_runs_report_valid_run(fixture_csv, tmp_db):
+    runner = CliRunner()
+    run_result = runner.invoke(main, ['run', '--file', fixture_csv, '--db', tmp_db])
+    for line in run_result.output.splitlines():
+        if 'Run ID' in line:
+            run_id = line.split(':')[1].strip()
+            break
+    report_result = runner.invoke(main, ['runs', 'report', run_id, '--db', tmp_db])
+    assert report_result.exit_code == 0
+    assert 'Run ID' in report_result.output
+
+
+def test_cli_runs_report_unknown_run(tmp_db):
+    runner = CliRunner()
+    result = runner.invoke(main, ['runs', 'report', 'bogus_run_id', '--db', tmp_db])
+    assert result.exit_code != 0
+
+
+def test_cli_runs_report_output_flag(fixture_csv, tmp_db, tmp_path):
+    runner = CliRunner()
+    run_result = runner.invoke(main, ['run', '--file', fixture_csv, '--db', tmp_db])
+    for line in run_result.output.splitlines():
+        if 'Run ID' in line:
+            run_id = line.split(':')[1].strip()
+            break
+    output_file = str(tmp_path / 'report.md')
+    result = runner.invoke(main, ['runs', 'report', run_id, '--db', tmp_db,
+                                  '--output', output_file])
+    assert result.exit_code == 0
+    from pathlib import Path
+    assert Path(output_file).exists()
+    assert 'Run ID' in Path(output_file).read_text()

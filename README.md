@@ -77,7 +77,16 @@ uvicorn src.provenanceflow.api.app:app --reload
 # Docs at http://localhost:8000/docs
 ```
 
-Key endpoints: `GET /runs`, `GET /runs/{run_id}`, `GET /runs/{a}/compare/{b}`
+The CLI also exposes provenance queries:
+
+```bash
+provenanceflow runs list                          # list all runs
+provenanceflow runs show <run_id>                 # PROV-JSON metadata
+provenanceflow runs report <run_id>               # Markdown reproducibility report
+provenanceflow runs report <run_id> --output report.md  # write to file
+```
+
+Key endpoints: `GET /runs`, `GET /runs/{run_id}`, `GET /runs/{run_id}/rejections`, `GET /runs/{run_id}/report`, `GET /runs/{a}/compare/{b}`
 
 ## Architecture
 
@@ -213,7 +222,7 @@ provenanceflow/
 │   ├── decorator.py     ← @track decorator for zero-friction provenance
 │   └── config.py        ← Pydantic settings
 ├── dags/                ← Apache Airflow DAG (NASA GISTEMP pipeline)
-├── tests/               ← 166-test pytest suite
+├── tests/               ← 190-test pytest suite
 ├── dashboard.py         ← Streamlit provenance explorer
 └── demo.py              ← Single-script end-to-end demo (NASA GISTEMP)
 ```
