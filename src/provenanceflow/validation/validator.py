@@ -1,4 +1,3 @@
-import json
 import pandas as pd
 from .rules import (
     ValidationResult,
@@ -58,38 +57,3 @@ class Validator:
             if r.severity == 'warning':
                 summary[r.rule_name] = summary.get(r.rule_name, 0) + 1
         return summary
-
-
-def collect_rejected_rows(
-    df: pd.DataFrame,
-    results: list[ValidationResult],
-) -> list[dict]:
-    """Join hard-rejected ValidationResult entries with actual DataFrame rows.
-
-    Only rows with severity == 'hard_rejection' and a non-None row_index
-    are included.  Dataset-level rules (row_index is None) are excluded
-    because they do not correspond to a single row.
-
-    Args:
-        df:      The raw DataFrame (before get_clean).
-        results: Full list of ValidationResult from Validator.validate().
-
-    Returns:
-        List of dicts with keys: rule, severity, message, row_index, row_data.
-    """
-    rejected: list[dict] = []
-    for r in results:
-        if r.severity != "hard_rejection" or r.row_index is None:
-            continue
-        try:
-            row_dict = df.loc[r.row_index].to_dict()
-        except KeyError:
-            row_dict = {}
-        rejected.append({
-            "rule":      r.rule_name,
-            "severity":  r.severity,
-            "message":   r.reason,
-            "row_index": int(r.row_index),
-            "row_data":  json.dumps(row_dict, default=str),
-        })
-    return rejected

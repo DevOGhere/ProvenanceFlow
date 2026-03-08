@@ -2,11 +2,10 @@
 ProvenanceFlow Demo
 Run: python demo.py
 """
-import json
 
-from src.provenanceflow.ingestion.nasa_gistemp import NASAGISTEMPSource
 from src.provenanceflow.pipeline.runner import run_pipeline
 from src.provenanceflow.provenance.store import ProvenanceStore
+import json
 
 NASA_GLOBAL_URL = 'https://data.giss.nasa.gov/gistemp/tabledata_v4/GLB.Ts+dSST.csv'
 
@@ -15,14 +14,10 @@ print("ProvenanceFlow — FAIR Data Lineage Demo")
 print("Dataset: NASA GISTEMP v4 Global Surface Temperature")
 print("=" * 60)
 
-source = NASAGISTEMPSource(url=NASA_GLOBAL_URL, output_dir='data/raw')
-result = run_pipeline(source=source)
-run_id = result.run_id
-
-print(f"\nRows in: {result.validation.rows_in} | "
-      f"Passed: {result.validation.rows_passed} | "
-      f"Rejected: {result.validation.rows_rejected} | "
-      f"Rejection rate: {result.validation.rejection_rate:.1%}")
+run_id = run_pipeline(
+    source_url=NASA_GLOBAL_URL,
+    local_path='data/raw/gistemp_global.csv',
+)
 
 store = ProvenanceStore()
 prov_record = store.get(run_id)

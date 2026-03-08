@@ -243,15 +243,14 @@ def test_prov_rules_applied_reflects_actual_rules(tmp_store, tmp_csv):
 # ── Dublin Core / Schema.org metadata tests ─────────────────────────────────
 
 def test_prov_entity_has_dc_title(tmp_store, tmp_csv):
-    """Ingestion entity must carry a Dublin Core dc:title (uses the title kwarg)."""
+    """Ingestion entity must carry a Dublin Core dc:title."""
     t = ProvenanceTracker()
-    t.track_ingestion('https://example.com/data.csv', tmp_csv, 10,
-                      title='My Test Dataset')
+    t.track_ingestion('https://example.com/data.csv', tmp_csv, 10)
     t.finalize(tmp_store)
     doc = tmp_store.get(t.run_id)
     attrs = _get_ingestion_entity(doc)
     assert 'dc:title' in attrs
-    assert attrs['dc:title'] == 'My Test Dataset'
+    assert 'GISTEMP' in attrs['dc:title']
 
 
 def test_prov_entity_has_schema_url(tmp_store, tmp_csv):
