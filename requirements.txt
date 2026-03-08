@@ -12,8 +12,7 @@ fastapi==0.115.8
 uvicorn==0.34.0
 httpx==0.28.1
 
-# Development / testing only (not needed on Streamlit Cloud)
-# pytest==8.3.2
+pytest==8.3.2
 
 # Airflow runs via Docker — see docker/docker-compose.yaml
 # apache-airflow==2.10.1
