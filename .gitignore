@@ -1,8 +1,10 @@
 data/raw/*
 data/processed/*
 !data/raw/.gitkeep
+!data/raw/gistemp_global.csv
 !data/processed/.gitkeep
-provenance_store/
+provenance_store/*
+!provenance_store/lineage.db
 __pycache__/
 *.pyc
 *.egg-info/
