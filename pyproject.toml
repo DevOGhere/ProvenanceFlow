@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "provenanceflow"
+version = "1.0.0"
+description = "FAIR-compliant data lineage tracking for scientific ML pipelines"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "prov==2.1.1",
+    "lxml==5.3.0",
+    "rdflib==7.1.1",
+    "pandas==2.2.2",
+    "numpy==1.26.4",
+    "requests==2.32.3",
+    "pydot==2.0.0",
+    "graphviz==0.20.3",
+    "pydantic-settings==2.7.1",
+    "fastapi==0.115.8",
+    "uvicorn==0.34.0",
+    "httpx==0.28.1",
+    "streamlit==1.43.0",
+    "click>=8.0",
+]
+
+[project.optional-dependencies]
+interactive-graph = ["pyvis>=0.3"]
+
+[project.scripts]
+provenanceflow = "provenanceflow.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

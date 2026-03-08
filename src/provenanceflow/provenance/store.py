@@ -34,6 +34,17 @@ class ProvenanceStore:
                 FOREIGN KEY (run_id) REFERENCES provenance_runs(run_id)
             )
         """)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS rejections (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id      TEXT NOT NULL,
+                rule        TEXT,
+                severity    TEXT,
+                message     TEXT,
+                row_index   INTEGER,
+                row_data    TEXT
+            )
+        """)
         self.conn.commit()
 
     def save(self, run_id: str, prov_json: dict):
@@ -67,6 +78,29 @@ class ProvenanceStore:
             "SELECT run_id, created_at FROM provenance_runs ORDER BY created_at DESC"
         )
         return [{'run_id': r[0], 'created_at': r[1]} for r in cursor.fetchall()]
+
+    def save_rejections(self, run_id: str, rejections: list[dict]) -> None:
+        """Persist rejected rows for a run (idempotent — replaces on repeat call)."""
+        self.conn.execute("DELETE FROM rejections WHERE run_id = ?", (run_id,))
+        for r in rejections:
+            self.conn.execute(
+                "INSERT INTO rejections (run_id, rule, severity, message, row_index, row_data) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (run_id, r["rule"], r["severity"], r["message"], r["row_index"], r["row_data"])
+            )
+        self.conn.commit()
+
+    def get_rejections(self, run_id: str) -> list[dict]:
+        """Return all rejected rows for a run, or [] if none."""
+        cursor = self.conn.execute(
+            "SELECT rule, severity, message, row_index, row_data "
+            "FROM rejections WHERE run_id = ? ORDER BY id",
+            (run_id,)
+        )
+        return [
+            {"rule": r[0], "severity": r[1], "message": r[2], "row_index": r[3], "row_data": r[4]}
+            for r in cursor.fetchall()
+        ]
 
     def query_by_date_range(self, start: str, end: str) -> list[dict]:
         """Return all runs whose created_at falls within [start, end] (ISO strings)."""

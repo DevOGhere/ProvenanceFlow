@@ -1,6 +1,15 @@
+from __future__ import annotations
+
+from datetime import datetime
+from pathlib import Path
+
 import pandas as pd
 import requests
-from pathlib import Path
+
+from .base import DataSource
+from ..models import IngestionResult
+from ..utils.checksums import sha256_file
+from ..utils.identifiers import generate_pid
 
 
 MONTHLY_COLS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
@@ -24,3 +33,38 @@ def parse_gistemp(local_path: str) -> pd.DataFrame:
     df = df[pd.to_numeric(df['Year'], errors='coerce').notna()].copy()
     df['Year'] = df['Year'].astype(int)
     return df.reset_index(drop=True)
+
+
+class NASAGISTEMPSource(DataSource):
+    """Ingests NASA GISTEMP data from the network."""
+
+    def __init__(self, url: str, local_path: str = "data/raw/gistemp.csv") -> None:
+        self._url = url
+        self._local_path = local_path
+
+    @property
+    def source_id(self) -> str:
+        return "nasa_gistemp"
+
+    @property
+    def dataset_title(self) -> str:
+        return "NASA GISTEMP v4 Global Surface Temperature"
+
+    @property
+    def dataset_license(self) -> str:
+        return "https://data.giss.nasa.gov/gistemp/"
+
+    @property
+    def _parse(self):
+        return parse_gistemp
+
+    def fetch(self) -> IngestionResult:
+        df = download_gistemp(self._url, self._local_path)
+        return IngestionResult(
+            source_url=self._url,
+            local_path=self._local_path,
+            row_count=len(df),
+            checksum_sha256=sha256_file(self._local_path),
+            dataset_pid=generate_pid("dataset"),
+            ingest_timestamp=datetime.utcnow(),
+        )

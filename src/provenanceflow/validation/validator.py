@@ -1,3 +1,4 @@
+import json
 import pandas as pd
 from .rules import (
     ValidationResult,
@@ -57,3 +58,23 @@ class Validator:
             if r.severity == 'warning':
                 summary[r.rule_name] = summary.get(r.rule_name, 0) + 1
         return summary
+
+
+def collect_rejected_rows(df: pd.DataFrame, results: list) -> list[dict]:
+    """Return structured dicts for every hard-rejected row (with a row_index)."""
+    collected = []
+    for r in results:
+        if r.severity != 'hard_rejection' or r.row_index is None:
+            continue
+        try:
+            row_data = df.iloc[r.row_index].to_json()
+        except (IndexError, ValueError):
+            row_data = "{}"
+        collected.append({
+            "rule": r.rule_name,
+            "severity": r.severity,
+            "message": r.reason,
+            "row_index": r.row_index,
+            "row_data": row_data,
+        })
+    return collected
