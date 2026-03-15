@@ -19,7 +19,8 @@ MONTHLY_COLS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
 def download_gistemp(url: str, local_path: str) -> pd.DataFrame:
     """Download GISTEMP CSV from NASA and return parsed DataFrame."""
     Path(local_path).parent.mkdir(parents=True, exist_ok=True)
-    response = requests.get(url, timeout=30)
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; ProvenanceFlow/1.0; research use)"}
+    response = requests.get(url, headers=headers, timeout=30)
     response.raise_for_status()
     with open(local_path, 'wb') as f:
         f.write(response.content)
