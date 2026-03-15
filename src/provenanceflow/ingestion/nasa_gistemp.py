@@ -19,7 +19,8 @@ MONTHLY_COLS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
 def download_gistemp(url: str, local_path: str) -> pd.DataFrame:
     """Download GISTEMP CSV from NASA and return parsed DataFrame."""
     Path(local_path).parent.mkdir(parents=True, exist_ok=True)
-    response = requests.get(url, timeout=30)
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; ProvenanceFlow/1.0; research use)"}
+    response = requests.get(url, headers=headers, timeout=30)
     response.raise_for_status()
     with open(local_path, 'wb') as f:
         f.write(response.content)
@@ -36,11 +37,11 @@ def parse_gistemp(local_path: str) -> pd.DataFrame:
 
 
 class NASAGISTEMPSource(DataSource):
-    """Downloads the NASA GISTEMP v4 global surface temperature dataset."""
+    """Ingests NASA GISTEMP data from the network."""
 
-    def __init__(self, url: str, output_dir: Path | str = "data/raw") -> None:
+    def __init__(self, url: str, local_path: str = "data/raw/gistemp.csv") -> None:
         self._url = url
-        self._output_dir = Path(output_dir)
+        self._local_path = local_path
 
     @property
     def source_id(self) -> str:
@@ -59,13 +60,12 @@ class NASAGISTEMPSource(DataSource):
         return parse_gistemp
 
     def fetch(self) -> IngestionResult:
-        local_path = self._output_dir / "gistemp_global.csv"
-        df = download_gistemp(self._url, str(local_path))
+        df = download_gistemp(self._url, self._local_path)
         return IngestionResult(
             source_url=self._url,
-            local_path=local_path,
+            local_path=self._local_path,
             row_count=len(df),
-            checksum_sha256=sha256_file(str(local_path)),
+            checksum_sha256=sha256_file(self._local_path),
             dataset_pid=generate_pid("dataset"),
             ingest_timestamp=datetime.utcnow(),
         )

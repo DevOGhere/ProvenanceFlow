@@ -1,29 +1,26 @@
 """
 ProvenanceFlow Demo
 Run: python demo.py
+Uses the bundled sample GISTEMP CSV (no network required).
 """
+
 import json
 
-from src.provenanceflow.ingestion.nasa_gistemp import NASAGISTEMPSource
+from src.provenanceflow.ingestion.local_csv import LocalCSVSource
 from src.provenanceflow.pipeline.runner import run_pipeline
 from src.provenanceflow.provenance.store import ProvenanceStore
 
-NASA_GLOBAL_URL = 'https://data.giss.nasa.gov/gistemp/tabledata_v4/GLB.Ts+dSST.csv'
+LOCAL_CSV = 'data/raw/gistemp_global.csv'
 
 print("=" * 60)
 print("ProvenanceFlow — FAIR Data Lineage Demo")
-print("Dataset: NASA GISTEMP v4 Global Surface Temperature")
+print("Dataset: NASA GISTEMP v4 (sample, bundled)")
 print("=" * 60)
 
-source = NASAGISTEMPSource(url=NASA_GLOBAL_URL, output_dir='data/raw')
+source = LocalCSVSource(path=LOCAL_CSV)
 result = run_pipeline(source=source)
+
 run_id = result.run_id
-
-print(f"\nRows in: {result.validation.rows_in} | "
-      f"Passed: {result.validation.rows_passed} | "
-      f"Rejected: {result.validation.rows_rejected} | "
-      f"Rejection rate: {result.validation.rejection_rate:.1%}")
-
 store = ProvenanceStore()
 prov_record = store.get(run_id)
 

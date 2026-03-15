@@ -38,23 +38,16 @@ class ProvenanceTracker:
 
     def track_ingestion(self, source_url: str, local_path: str,
                         row_count: int,
-                        title: str = "Dataset",
-                        license: str = "Unknown") -> prov.ProvEntity:
-        """Record that a dataset was ingested from source_url.
-
-        Args:
-            source_url: URL or file URI of the data source.
-            local_path: Local filesystem path of the downloaded/read file.
-            row_count:  Number of rows in the raw dataset.
-            title:      Human-readable dataset name (for Dublin Core dc:title).
-            license:    License URI or name (for Dublin Core dc:license).
-        """
+                        title: str = 'NASA GISTEMP v4 Global Surface Temperature',
+                        license_url: str = 'https://data.giss.nasa.gov/gistemp/',
+                        ) -> prov.ProvEntity:
+        """Record that a dataset was downloaded from source_url."""
         dataset_pid = generate_pid('dataset')
         ingest_ts = datetime.utcnow().isoformat()
         entity = self.doc.entity(
             f'pf:dataset_{dataset_pid}',
             {
-                'prov:label': f'Raw dataset: {title}',
+                'prov:label': f'Raw dataset from {source_url}',
                 'fair:identifier': dataset_pid,
                 'fair:source_url': source_url,
                 'pf:row_count': row_count,
@@ -67,7 +60,7 @@ class ProvenanceTracker:
                 'dc:format':     'text/csv',
                 'dc:created':    ingest_ts,
                 'dc:type':       'Dataset',
-                'dc:license':    license,
+                'dc:license':    license_url,
                 # Schema.org vocabulary
                 'schema:name':           title,
                 'schema:url':            source_url,
@@ -107,11 +100,11 @@ class ProvenanceTracker:
         output_entity = self.doc.entity(
             f'pf:validated_{output_pid}',
             {
-                'prov:label': 'Validated dataset',
+                'prov:label': 'Validated GISTEMP dataset',
                 'fair:identifier': output_pid,
                 'pf:row_count': rows_passed,
                 # Dublin Core — links validated output back to raw source
-                'dc:title':       'Validated dataset',
+                'dc:title':       'Validated NASA GISTEMP v4 dataset',
                 'dc:identifier':  output_pid,
                 'dc:type':        'Dataset',
                 'dc:isVersionOf': str(input_entity.identifier),
@@ -125,21 +118,18 @@ class ProvenanceTracker:
 
         return output_entity
 
+    def finalize(self, store: ProvenanceStore) -> str:
+        """Serialize PROV document to JSON and persist to store."""
+        prov_json = json.loads(self.doc.serialize(format='json'))
+        store.save(self.run_id, prov_json)
+        return self.run_id
+
     def track_transformation(self, input_entity: prov.ProvEntity,
                              rows_in: int, rows_out: int,
                              function_name: str,
-                             checksum_in: str = "",
-                             checksum_out: str = "") -> prov.ProvEntity:
-        """Record an arbitrary DataFrame transformation (used by the @track decorator).
-
-        Args:
-            input_entity:   PROV entity representing the input DataFrame.
-            rows_in:        Row count of the input DataFrame.
-            rows_out:       Row count of the output DataFrame.
-            function_name:  Qualified name of the function that ran (func.__qualname__).
-            checksum_in:    SHA-256 of the input DataFrame CSV bytes.
-            checksum_out:   SHA-256 of the output DataFrame CSV bytes.
-        """
+                             checksum_in: str = '',
+                             checksum_out: str = '') -> prov.ProvEntity:
+        """Record a DataFrame transformation step (used by the @track decorator)."""
         output_pid = generate_pid('transformed')
 
         transform_activity = self.doc.activity(
@@ -149,7 +139,6 @@ class ProvenanceTracker:
                 'pf:function_name': function_name,
                 'pf:rows_in': rows_in,
                 'pf:rows_out': rows_out,
-                'pf:rows_removed': rows_in - rows_out,
                 'pf:checksum_in': checksum_in,
                 'pf:checksum_out': checksum_out,
             }
@@ -162,7 +151,7 @@ class ProvenanceTracker:
                 'fair:identifier': output_pid,
                 'pf:row_count': rows_out,
                 'pf:checksum_sha256': checksum_out,
-                'dc:title': f'Output of {function_name}',
+                'dc:title': f'Transformed dataset ({function_name})',
                 'dc:identifier': output_pid,
                 'dc:type': 'Dataset',
                 'dc:isVersionOf': str(input_entity.identifier),
@@ -175,9 +164,3 @@ class ProvenanceTracker:
         self.doc.wasAssociatedWith(transform_activity, self._pipeline_agent)
 
         return output_entity
-
-    def finalize(self, store: ProvenanceStore) -> str:
-        """Serialize PROV document to JSON and persist to store."""
-        prov_json = json.loads(self.doc.serialize(format='json'))
-        store.save(self.run_id, prov_json)
-        return self.run_id
