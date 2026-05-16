@@ -24,6 +24,7 @@ The gap: **linking per-row rejection rationale into a W3C PROV graph** that docu
 
 ```bash
 pip install -r requirements.txt
+pip install -e .          # installs the provenanceflow package itself
 python demo.py
 ```
 
@@ -35,9 +36,12 @@ from provenanceflow import track
 @track
 def remove_outliers(df):
     return df[df["value"].between(-3.0, 3.0)]
+
+result = remove_outliers(df)
+print(result.attrs["_prov_run_id"])  # run ID for querying the lineage record
 ```
 
-Every call records: input checksum, output checksum, row count delta, and a W3C PROV entity-activity-agent graph — stored in SQLite, queryable by run ID.
+Every call records: input checksum, output checksum, row count delta, and a W3C PROV lineage graph — stored in SQLite, queryable by run ID.
 
 ---
 
