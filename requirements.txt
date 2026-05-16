@@ -1,17 +1,28 @@
+# Core provenance standard
 prov==2.1.1
 lxml>=5.3.0
 rdflib==7.1.1
+
+# Data processing
 pandas==2.2.2
 numpy==1.26.4
 requests==2.32.3
+
+# Visualization
 pydot==2.0.0
-graphviz==0.20.3
+
+# Dashboard
 streamlit==1.43.0
+
+# Config + API contracts
 pydantic-settings==2.7.1
+
+# REST API + CLI (not needed for dashboard, kept for full install)
 fastapi==0.115.8
 uvicorn==0.34.0
 httpx==0.28.1
 
+# Dev
 pytest==8.3.2
 
 # Airflow runs via Docker — see docker/docker-compose.yaml
