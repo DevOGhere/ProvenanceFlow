@@ -8,6 +8,7 @@ from ..ingestion.nasa_gistemp import download_gistemp
 from ..ingestion.base import DataSource
 from ..validation.validator import Validator
 from ..validation.basic_validator import BasicValidator
+from ..validation.contrib.gistemp import GISTEMP_RULES, GISTEMP_RULE_NAMES
 from ..provenance.tracker import ProvenanceTracker
 from ..provenance.store import ProvenanceStore
 from ..models import (
@@ -45,7 +46,7 @@ def _run_legacy(source_url: str, local_path: str, db_path: str) -> str:
         row_count=len(df),
     )
 
-    validator = Validator()
+    validator = Validator(rules=GISTEMP_RULES)
     results = validator.validate(df)
     clean_df = validator.get_clean(df, results)
     rejections = validator.rejection_summary(results)
@@ -57,7 +58,7 @@ def _run_legacy(source_url: str, local_path: str, db_path: str) -> str:
         rows_passed=len(clean_df),
         rejections=rejections,
         warnings=warnings,
-        rules_applied=Validator.RULE_NAMES,
+        rules_applied=validator.rule_names,
     )
 
     return tracker.finalize(store)
@@ -86,13 +87,11 @@ def _run_source(source: DataSource, db_path: str) -> PipelineResult:
         license_url=source.dataset_license,
     )
 
-    # Step 2: Validate — BasicValidator for generic CSV, Validator for GISTEMP
+    # Step 2: Validate — BasicValidator for generic CSV, GISTEMP rules otherwise
     if source.source_id == "generic_csv":
-        validator: Validator | BasicValidator = BasicValidator()
-        rule_names = BasicValidator.RULE_NAMES
+        validator: Validator = BasicValidator()
     else:
-        validator = Validator()
-        rule_names = Validator.RULE_NAMES
+        validator = Validator(rules=GISTEMP_RULES)
 
     results = validator.validate(df)
     clean_df = validator.get_clean(df, results)
@@ -108,7 +107,7 @@ def _run_source(source: DataSource, db_path: str) -> PipelineResult:
         rows_passed=len(clean_df),
         rejections=rejections,
         warnings=warnings,
-        rules_applied=rule_names,
+        rules_applied=validator.rule_names,
     )
 
     run_id = tracker.finalize(store)
@@ -118,7 +117,7 @@ def _run_source(source: DataSource, db_path: str) -> PipelineResult:
         rows_passed=len(clean_df),
         rows_rejected=rows_rejected,
         rejection_rate=rejection_rate,
-        rules_applied=rule_names,
+        rules_applied=validator.rule_names,
         rejections_by_rule=rejections,
         warnings_by_rule=warnings,
     )
