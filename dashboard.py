@@ -48,15 +48,23 @@ def _get_ingestion_entity(doc: dict) -> dict:
 
 
 def _get_validation_activity(doc: dict) -> dict:
+    # Check validate_ (full pipeline) then transform_ (@track decorator runs)
     for aid, attrs in doc.get('activity', {}).items():
         if 'validate_' in aid:
+            return attrs
+    for aid, attrs in doc.get('activity', {}).items():
+        if 'transform_' in aid:
             return attrs
     return {}
 
 
 def _get_validated_entity(doc: dict) -> dict:
+    # Check validated_ (full pipeline) then transformed_ (@track decorator runs)
     for eid, attrs in doc.get('entity', {}).items():
         if 'validated_' in eid:
+            return attrs
+    for eid, attrs in doc.get('entity', {}).items():
+        if 'transformed_' in eid:
             return attrs
     return {}
 

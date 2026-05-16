@@ -25,8 +25,6 @@ from __future__ import annotations
 import functools
 import hashlib
 import inspect
-import tempfile
-from pathlib import Path
 from typing import Callable
 
 import pandas as pd
@@ -80,24 +78,16 @@ def track(_func=None, *, title: str | None = None, db_path: str | None = None):
             func_location = f"file://{inspect.getfile(func)}"
             in_checksum = _df_checksum(df_in)
 
-            # Write df_in to a temp file so track_ingestion can sha256_file it
-            tmp = tempfile.NamedTemporaryFile(suffix=".csv", delete=False, mode="w")
-            try:
-                df_in.to_csv(tmp, index=False)
-                tmp.flush()
-                tmp_path = tmp.name
-            finally:
-                tmp.close()
-
             db = db_path or str(get_settings().prov_db_path)
             store = ProvenanceStore(db_path=db)
             tracker = ProvenanceTracker()
 
+            # Pass checksum directly — no tempfile needed
             raw_entity = tracker.track_ingestion(
                 source_url=func_location,
-                local_path=tmp_path,
                 row_count=len(df_in),
                 title=func_label,
+                checksum=in_checksum,
             )
 
             # Call the actual function
@@ -119,7 +109,10 @@ def track(_func=None, *, title: str | None = None, db_path: str | None = None):
             run_id = tracker.finalize(store)
             tracked_runs.append(run_id)
 
-            Path(tmp_path).unlink(missing_ok=True)
+            import logging
+            logging.getLogger(__name__).debug(
+                "provenance captured: %s → run_id=%s", func.__qualname__, run_id
+            )
 
             # Attach run_id to result DataFrame (non-destructive)
             if isinstance(result, pd.DataFrame):

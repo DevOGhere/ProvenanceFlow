@@ -36,14 +36,22 @@ class ProvenanceTracker:
             }
         )
 
-    def track_ingestion(self, source_url: str, local_path: str,
-                        row_count: int,
-                        title: str = 'NASA GISTEMP v4 Global Surface Temperature',
-                        license_url: str = 'https://data.giss.nasa.gov/gistemp/',
+    def track_ingestion(self, source_url: str, local_path: str = '',
+                        row_count: int = 0,
+                        title: str = 'Dataset',
+                        license_url: str = '',
+                        checksum: str | None = None,
                         ) -> prov.ProvEntity:
-        """Record that a dataset was downloaded from source_url."""
+        """Record that a dataset was ingested from source_url.
+
+        Args:
+            checksum: Pre-computed SHA-256 hex digest. When provided, local_path
+                      is not read from disk. Pass this from the @track decorator
+                      to avoid writing a tempfile just for checksumming.
+        """
         dataset_pid = generate_pid('dataset')
         ingest_ts = datetime.utcnow().isoformat()
+        sha = checksum if checksum is not None else (sha256_file(local_path) if local_path else '')
         entity = self.doc.entity(
             f'pf:dataset_{dataset_pid}',
             {
@@ -52,7 +60,7 @@ class ProvenanceTracker:
                 'fair:source_url': source_url,
                 'pf:row_count': row_count,
                 'pf:ingest_timestamp': ingest_ts,
-                'pf:checksum_sha256': sha256_file(local_path),
+                'pf:checksum_sha256': sha,
                 # Dublin Core terms — interoperable with EUDAT / Zenodo / RADAR registries
                 'dc:title':      title,
                 'dc:identifier': dataset_pid,
