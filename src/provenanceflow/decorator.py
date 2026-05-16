@@ -68,57 +68,98 @@ def track(_func=None, *, title: str | None = None, db_path: str | None = None):
     def decorator(func: Callable) -> Callable:
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
+            from .pipeline.context import _active_pipeline
+
             df_in = _find_dataframe(args, kwargs, func)
 
-            # No DataFrame argument — call function transparently
+            # No DataFrame argument — call transparently regardless of context
             if df_in is None:
                 return func(*args, **kwargs)
 
-            func_label = title or f"{func.__module__}.{func.__qualname__}"
+            func_label    = title or f"{func.__module__}.{func.__qualname__}"
             func_location = f"file://{inspect.getfile(func)}"
-            in_checksum = _df_checksum(df_in)
+            in_checksum   = _df_checksum(df_in)
 
-            db = db_path or str(get_settings().prov_db_path)
-            store = ProvenanceStore(db_path=db)
-            tracker = ProvenanceTracker()
+            pipeline = _active_pipeline.get()
 
-            # Pass checksum directly — no tempfile needed
-            raw_entity = tracker.track_ingestion(
-                source_url=func_location,
-                row_count=len(df_in),
-                title=func_label,
-                checksum=in_checksum,
-            )
+            if pipeline is not None:
+                # ── Pipeline mode: shared tracker, chained graph ──────────
+                tracker = pipeline.tracker
 
-            # Call the actual function
-            result = func(*args, **kwargs)
+                if pipeline._last_entity is None:
+                    # First step: ingest the raw input as a proper entity
+                    input_entity = tracker.track_ingestion(
+                        source_url=func_location,
+                        row_count=len(df_in),
+                        title=func_label,
+                        checksum=in_checksum,
+                    )
+                else:
+                    # Subsequent steps: previous output entity IS this input
+                    input_entity = pipeline._last_entity
 
-            df_out = result if isinstance(result, pd.DataFrame) else None
-            out_checksum = _df_checksum(df_out) if df_out is not None else ""
-            rows_out = len(df_out) if df_out is not None else len(df_in)
+                result = func(*args, **kwargs)
 
-            tracker.track_transformation(
-                input_entity=raw_entity,
-                rows_in=len(df_in),
-                rows_out=rows_out,
-                function_name=func.__qualname__,
-                checksum_in=in_checksum,
-                checksum_out=out_checksum,
-            )
+                df_out      = result if isinstance(result, pd.DataFrame) else None
+                out_checksum = _df_checksum(df_out) if df_out is not None else ""
+                rows_out    = len(df_out) if df_out is not None else len(df_in)
 
-            run_id = tracker.finalize(store)
-            tracked_runs.append(run_id)
+                output_entity = tracker.track_transformation(
+                    input_entity=input_entity,
+                    rows_in=len(df_in),
+                    rows_out=rows_out,
+                    function_name=func.__qualname__,
+                    checksum_in=in_checksum,
+                    checksum_out=out_checksum,
+                )
+                pipeline._last_entity = output_entity
 
-            import logging
-            logging.getLogger(__name__).debug(
-                "provenance captured: %s → run_id=%s", func.__qualname__, run_id
-            )
+                # Attach the pipeline's (not-yet-finalised) run_id
+                if isinstance(result, pd.DataFrame):
+                    result.attrs["_prov_run_id"] = tracker.run_id
 
-            # Attach run_id to result DataFrame (non-destructive)
-            if isinstance(result, pd.DataFrame):
-                result.attrs["_prov_run_id"] = run_id
+                return result
 
-            return result
+            else:
+                # ── Standalone mode: isolated PROV doc per call ───────────
+                db    = db_path or str(get_settings().prov_db_path)
+                store = ProvenanceStore(db_path=db)
+                tracker = ProvenanceTracker()
+
+                raw_entity = tracker.track_ingestion(
+                    source_url=func_location,
+                    row_count=len(df_in),
+                    title=func_label,
+                    checksum=in_checksum,
+                )
+
+                result = func(*args, **kwargs)
+
+                df_out       = result if isinstance(result, pd.DataFrame) else None
+                out_checksum = _df_checksum(df_out) if df_out is not None else ""
+                rows_out     = len(df_out) if df_out is not None else len(df_in)
+
+                tracker.track_transformation(
+                    input_entity=raw_entity,
+                    rows_in=len(df_in),
+                    rows_out=rows_out,
+                    function_name=func.__qualname__,
+                    checksum_in=in_checksum,
+                    checksum_out=out_checksum,
+                )
+
+                run_id = tracker.finalize(store)
+                tracked_runs.append(run_id)
+
+                import logging
+                logging.getLogger(__name__).debug(
+                    "provenance captured: %s → run_id=%s", func.__qualname__, run_id
+                )
+
+                if isinstance(result, pd.DataFrame):
+                    result.attrs["_prov_run_id"] = run_id
+
+                return result
 
         wrapper._is_tracked = True
         return wrapper
