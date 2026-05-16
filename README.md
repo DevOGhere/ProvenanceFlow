@@ -124,7 +124,30 @@ The included demo pipeline runs against NASA GISTEMP v4 climate data and applies
 | `temporal_continuity` | warning | Gaps in the year sequence |
 | `baseline_integrity` | warning | Incomplete 1951-1980 anomaly baseline |
 
-These are example rules for a specific dataset. The validator accepts any callable that returns a `ValidationResult` — bring your own rules for your own data.
+These are bundled rules for GISTEMP-shaped data. Write your own rules for any dataset using the `@rule` decorator:
+
+```python
+from provenanceflow import rule, Validator
+
+@rule(severity="hard_rejection")
+def no_negative_ages(row, idx):
+    age = row.get("age")
+    if age is not None and float(age) < 0:
+        return f"Negative age: {age}"  # return a string = failure
+    # return None implicitly = pass
+
+@rule(severity="warning")
+def no_duplicate_ids(df):  # one-param signature = DataFrame-level rule
+    dupes = df[df["patient_id"].duplicated()]
+    return [(int(i), f"Duplicate patient_id: {df.loc[i, 'patient_id']}") for i in dupes.index]
+
+validator = Validator(rules=[no_negative_ages, no_duplicate_ids])
+results = validator.validate(df)
+clean_df = validator.get_clean(df, results)
+print(validator.rejection_summary(results))  # {'no_negative_ages': 3}
+```
+
+Row-level rules take `(row, idx)` and return a string (fail) or `None` (pass). Return `(string, severity)` to override severity dynamically. DataFrame-level rules take just `(df,)` and return a list of `(row_index, reason)` tuples.
 
 ---
 
