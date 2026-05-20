@@ -1,192 +1,182 @@
 import pandas as pd
 import pytest
-from src.provenanceflow.validation.rules import (
-    check_null_values,
-    check_temperature_range,
-    check_completeness,
-    check_temporal_continuity,
-    check_baseline_integrity,
+
+from src.provenanceflow.validation.contrib.gistemp import (
+    null_check,
+    range_check,
+    completeness_check,
+    temporal_continuity,
+    baseline_integrity,
     MONTHLY_COLS,
+    GISTEMP_RULES,
 )
 from src.provenanceflow.validation.validator import Validator
 
 
 def make_row(year=1990, monthly_val=0.10, annual=0.10, nulls=None):
-    """Build a minimal GISTEMP-style row."""
     data = {col: monthly_val for col in MONTHLY_COLS}
-    data['Year'] = year
-    data['J-D'] = annual
+    data["Year"] = year
+    data["J-D"] = annual
     if nulls:
         for col in nulls:
-            data[col] = float('nan')
+            data[col] = float("nan")
     return pd.Series(data)
 
 
 def make_df(years, monthly_val=0.10):
-    rows = [make_row(year=y, monthly_val=monthly_val) for y in years]
-    return pd.DataFrame(rows)
+    return pd.DataFrame([make_row(year=y, monthly_val=monthly_val) for y in years])
 
 
-# --- check_null_values ---
+# ── null_check ─────────────────────────────────────────────────────────────────
 
 def test_null_check_clean_row():
-    assert check_null_values(make_row(), 0) == []
+    assert null_check(make_row(), 0) == []
 
 
 def test_null_check_warning_few_nulls():
-    results = check_null_values(make_row(nulls=['Jan', 'Feb']), 0)
+    results = null_check(make_row(nulls=["Jan", "Feb"]), 0)
     assert len(results) == 1
-    assert results[0].severity == 'warning'
-    assert results[0].rule_name == 'null_check'
+    assert results[0].severity == "warning"
+    assert results[0].rule_name == "null_check"
 
 
 def test_null_check_hard_rejection_many_nulls():
-    results = check_null_values(make_row(nulls=['Jan', 'Feb', 'Mar', 'Apr']), 0)
-    assert results[0].severity == 'hard_rejection'
+    results = null_check(make_row(nulls=["Jan", "Feb", "Mar", "Apr"]), 0)
+    assert results[0].severity == "hard_rejection"
 
 
-# --- check_temperature_range ---
+def test_null_check_exactly_3_nulls_is_warning():
+    results = null_check(make_row(nulls=["Jan", "Feb", "Mar"]), 0)
+    assert len(results) == 1
+    assert results[0].severity == "warning"
+
+
+# ── range_check ────────────────────────────────────────────────────────────────
 
 def test_range_check_valid():
-    assert check_temperature_range(make_row(annual=1.5), 0) == []
+    assert range_check(make_row(annual=1.5), 0) == []
 
 
 def test_range_check_exceeds_max():
-    results = check_temperature_range(make_row(annual=3.1), 0)
+    results = range_check(make_row(annual=3.1), 0)
     assert len(results) == 1
-    assert results[0].severity == 'hard_rejection'
-    assert results[0].value == pytest.approx(3.1)
+    assert results[0].severity == "hard_rejection"
+    assert "3.1" in results[0].reason
 
 
 def test_range_check_below_min():
-    results = check_temperature_range(make_row(annual=-3.5), 0)
-    assert results[0].severity == 'hard_rejection'
+    results = range_check(make_row(annual=-3.5), 0)
+    assert results[0].severity == "hard_rejection"
 
 
 def test_range_check_nan_annual_skipped():
     row = make_row()
-    row['J-D'] = float('nan')
-    assert check_temperature_range(row, 0) == []
+    row["J-D"] = float("nan")
+    assert range_check(row, 0) == []
 
 
-# --- check_completeness ---
+def test_range_check_exactly_at_bounds_passes():
+    assert range_check(make_row(annual=-3.0), 0) == []
+    assert range_check(make_row(annual=3.0), 0) == []
+
+
+# ── completeness_check ─────────────────────────────────────────────────────────
 
 def test_completeness_ok():
-    assert check_completeness(make_row(nulls=['Jan']), 0) == []
+    assert completeness_check(make_row(nulls=["Jan"]), 0) == []
+
+
+def test_completeness_exactly_3_nulls_passes():
+    assert completeness_check(make_row(nulls=["Jan", "Feb", "Mar"]), 0) == []
+
+
+def test_completeness_exactly_4_nulls_hard_rejection():
+    results = completeness_check(make_row(nulls=["Jan", "Feb", "Mar", "Apr"]), 0)
+    assert len(results) == 1
+    assert results[0].severity == "hard_rejection"
+    assert results[0].rule_name == "completeness_check"
 
 
 def test_completeness_hard_rejection():
-    results = check_completeness(make_row(nulls=['Jan', 'Feb', 'Mar', 'Apr']), 0)
-    assert results[0].severity == 'hard_rejection'
-    assert results[0].rule_name == 'completeness_check'
+    results = completeness_check(make_row(nulls=["Jan", "Feb", "Mar", "Apr"]), 0)
+    assert results[0].severity == "hard_rejection"
 
 
-# --- check_temporal_continuity ---
+# ── temporal_continuity ────────────────────────────────────────────────────────
 
 def test_temporal_continuity_no_gaps():
-    df = make_df([1880, 1881, 1882])
-    assert check_temporal_continuity(df) == []
+    assert temporal_continuity(make_df([1880, 1881, 1882])) == []
 
 
 def test_temporal_continuity_detects_gap():
-    df = make_df([1880, 1882])  # gap at 1881
-    results = check_temporal_continuity(df)
+    results = temporal_continuity(make_df([1880, 1882]))
     assert len(results) == 1
-    assert '1880' in results[0].reason and '1882' in results[0].reason
+    assert "1880" in results[0].reason and "1882" in results[0].reason
 
 
-# --- check_baseline_integrity ---
+# ── baseline_integrity ─────────────────────────────────────────────────────────
 
 def test_baseline_integrity_pass():
-    df = make_df(list(range(1951, 1981)))
-    assert check_baseline_integrity(df) == []
+    assert baseline_integrity(make_df(list(range(1951, 1981)))) == []
 
 
 def test_baseline_integrity_incomplete_years():
-    df = make_df(list(range(1951, 1970)))  # only 19 of 30 years
-    results = check_baseline_integrity(df)
+    results = baseline_integrity(make_df(list(range(1951, 1970))))
     assert len(results) == 1
-    assert results[0].rule_name == 'baseline_integrity'
+    assert results[0].rule_name == "baseline_integrity"
 
 
-# --- Validator integration ---
+def test_baseline_integrity_missing_monthly_within_baseline():
+    rows = [make_row(year=y) for y in range(1951, 1981)]
+    df = pd.DataFrame(rows)
+    df.loc[df["Year"] == 1960, "Jun"] = float("nan")
+    results = baseline_integrity(df)
+    assert len(results) == 1
+    assert "1960" in results[0].reason
+
+
+# ── Validator integration ──────────────────────────────────────────────────────
+
+def test_validator_requires_rules():
+    with pytest.raises(ValueError, match="at least one rule"):
+        Validator(rules=[])
+
 
 def test_validator_get_clean_removes_hard_rejections():
-    # Row 0: clean, Row 1: hard rejection (annual out of range)
     df = pd.DataFrame([
         make_row(year=1990, annual=0.5),
         make_row(year=1991, annual=9.9),
     ])
-    v = Validator()
+    v = Validator(rules=GISTEMP_RULES)
     results = v.validate(df)
     clean = v.get_clean(df, results)
     assert len(clean) == 1
-    assert clean.iloc[0]['Year'] == 1990
+    assert clean.iloc[0]["Year"] == 1990
+
+
+def test_validator_get_clean_with_zero_rejections():
+    df = pd.DataFrame([make_row(year=y) for y in range(1990, 1995)])
+    v = Validator(rules=GISTEMP_RULES)
+    results = v.validate(df)
+    rejections = [r for r in results if r.severity == "hard_rejection"]
+    assert rejections == []
+    assert len(v.get_clean(df, results)) == len(df)
 
 
 def test_validator_rejection_summary():
     df = pd.DataFrame([make_row(year=1990, annual=9.9)])
-    v = Validator()
-    results = v.validate(df)
-    summary = v.rejection_summary(results)
-    assert 'range_check' in summary
-    assert summary['range_check'] >= 1
+    v = Validator(rules=GISTEMP_RULES)
+    summary = v.rejection_summary(v.validate(df))
+    assert summary.get("range_check", 0) >= 1
 
 
 def test_validator_warning_summary():
-    df = pd.DataFrame([make_row(year=1990, nulls=['Jan'])])
-    v = Validator()
-    results = v.validate(df)
-    summary = v.warning_summary(results)
-    assert 'null_check' in summary
+    df = pd.DataFrame([make_row(year=1990, nulls=["Jan"])])
+    v = Validator(rules=GISTEMP_RULES)
+    summary = v.warning_summary(v.validate(df))
+    assert "null_check" in summary
 
 
-# --- boundary / edge-case tests ---
-
-def test_null_check_exactly_3_nulls_is_warning():
-    """Exactly 3 missing monthly values → warning, not hard_rejection."""
-    results = check_null_values(make_row(nulls=['Jan', 'Feb', 'Mar']), 0)
-    assert len(results) == 1
-    assert results[0].severity == 'warning'
-
-
-def test_completeness_exactly_3_nulls_passes():
-    """≤3 missing values → completeness_check passes (returns nothing)."""
-    assert check_completeness(make_row(nulls=['Jan', 'Feb', 'Mar']), 0) == []
-
-
-def test_completeness_exactly_4_nulls_hard_rejection():
-    """4 missing values is the boundary that triggers hard_rejection."""
-    results = check_completeness(make_row(nulls=['Jan', 'Feb', 'Mar', 'Apr']), 0)
-    assert len(results) == 1
-    assert results[0].severity == 'hard_rejection'
-
-
-def test_range_check_exactly_at_bounds_passes():
-    """-3.0 and +3.0 are within range and should not be flagged."""
-    assert check_temperature_range(make_row(annual=-3.0), 0) == []
-    assert check_temperature_range(make_row(annual=3.0), 0) == []
-
-
-def test_validator_get_clean_with_zero_rejections():
-    """get_clean() on a fully clean DataFrame must return all rows unchanged."""
-    df = pd.DataFrame([make_row(year=y) for y in range(1990, 1995)])
-    v = Validator()
-    results = v.validate(df)
-    # Ensure no hard rejections in this clean fixture
-    rejections = [r for r in results if r.severity == 'hard_rejection']
-    assert rejections == []
-    clean = v.get_clean(df, results)
-    assert len(clean) == len(df)
-
-
-def test_baseline_integrity_missing_monthly_within_baseline():
-    """Full 30-year baseline present, but one year has a NaN monthly value → warning."""
-    rows = [make_row(year=y) for y in range(1951, 1981)]  # 30 complete rows
-    df = pd.DataFrame(rows)
-    # Inject a missing monthly value inside the baseline
-    df.loc[df['Year'] == 1960, 'Jun'] = float('nan')
-    results = check_baseline_integrity(df)
-    assert len(results) == 1
-    assert results[0].rule_name == 'baseline_integrity'
-    assert '1960' in results[0].reason
+def test_validator_rule_names_match_gistemp():
+    v = Validator(rules=GISTEMP_RULES)
+    assert v.rule_names == [r.name for r in GISTEMP_RULES]

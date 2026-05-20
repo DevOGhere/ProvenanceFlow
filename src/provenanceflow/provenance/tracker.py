@@ -5,7 +5,7 @@ from datetime import datetime
 import prov.model as prov
 
 from .store import ProvenanceStore
-from ..utils.identifiers import generate_pid
+from ..utils.identifiers import generate_pid, generate_uid
 from ..utils.checksums import sha256_file
 
 
@@ -36,23 +36,32 @@ class ProvenanceTracker:
             }
         )
 
-    def track_ingestion(self, source_url: str, local_path: str,
-                        row_count: int,
-                        title: str = 'NASA GISTEMP v4 Global Surface Temperature',
-                        license_url: str = 'https://data.giss.nasa.gov/gistemp/',
+    def track_ingestion(self, source_url: str, local_path: str = '',
+                        row_count: int = 0,
+                        title: str = 'Dataset',
+                        license_url: str = '',
+                        checksum: str | None = None,
                         ) -> prov.ProvEntity:
-        """Record that a dataset was downloaded from source_url."""
-        dataset_pid = generate_pid('dataset')
+        """Record that a dataset was ingested from source_url.
+
+        Args:
+            checksum: Pre-computed SHA-256 hex digest. When provided, local_path
+                      is not read from disk. Pass this from the @track decorator
+                      to avoid writing a tempfile just for checksumming.
+        """
+        uid = generate_uid()
+        dataset_pid = f'dataset_{uid}'   # semantic PID for fair:identifier
         ingest_ts = datetime.utcnow().isoformat()
+        sha = checksum if checksum is not None else (sha256_file(local_path) if local_path else '')
         entity = self.doc.entity(
-            f'pf:dataset_{dataset_pid}',
+            f'pf:dataset_{uid}',         # clean PROV entity key — no double prefix
             {
                 'prov:label': f'Raw dataset from {source_url}',
                 'fair:identifier': dataset_pid,
                 'fair:source_url': source_url,
                 'pf:row_count': row_count,
                 'pf:ingest_timestamp': ingest_ts,
-                'pf:checksum_sha256': sha256_file(local_path),
+                'pf:checksum_sha256': sha,
                 # Dublin Core terms — interoperable with EUDAT / Zenodo / RADAR registries
                 'dc:title':      title,
                 'dc:identifier': dataset_pid,
@@ -80,7 +89,8 @@ class ProvenanceTracker:
                          rejections: dict, warnings: dict,
                          rules_applied: list[str] | None = None) -> prov.ProvEntity:
         """Record validation step with full rejection/warning breakdown."""
-        output_pid = generate_pid('validated')
+        out_uid = generate_uid()
+        output_pid = f'validated_{out_uid}'
         rows_rejected = rows_in - rows_passed
 
         validation_activity = self.doc.activity(
@@ -98,7 +108,7 @@ class ProvenanceTracker:
         )
 
         output_entity = self.doc.entity(
-            f'pf:validated_{output_pid}',
+            f'pf:validated_{out_uid}',   # clean PROV entity key
             {
                 'prov:label': 'Validated GISTEMP dataset',
                 'fair:identifier': output_pid,
@@ -130,7 +140,8 @@ class ProvenanceTracker:
                              checksum_in: str = '',
                              checksum_out: str = '') -> prov.ProvEntity:
         """Record a DataFrame transformation step (used by the @track decorator)."""
-        output_pid = generate_pid('transformed')
+        tr_uid = generate_uid()
+        output_pid = f'transformed_{tr_uid}'
 
         transform_activity = self.doc.activity(
             f'pf:transform_{uuid.uuid4().hex[:8]}',
@@ -145,7 +156,7 @@ class ProvenanceTracker:
         )
 
         output_entity = self.doc.entity(
-            f'pf:transformed_{output_pid}',
+            f'pf:transformed_{tr_uid}',  # clean PROV entity key
             {
                 'prov:label': f'Output of {function_name}',
                 'fair:identifier': output_pid,

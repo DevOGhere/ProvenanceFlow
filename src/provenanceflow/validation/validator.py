@@ -1,70 +1,34 @@
-import json
+"""
+Validator — runs a list of RuleFunction objects against a DataFrame.
+
+The validator is dataset-agnostic: it knows nothing about column names,
+domains, or data formats. All domain knowledge lives in the rules you pass in.
+
+    from provenanceflow.validation.validator import Validator
+    from provenanceflow.validation.contrib.gistemp import GISTEMP_RULES
+
+    validator = Validator(rules=GISTEMP_RULES)
+    results = validator.validate(df)
+    clean_df = validator.get_clean(df, results)
+    print(validator.rejection_summary(results))
+"""
+from __future__ import annotations
+
 import pandas as pd
-from .rules import (
-    ValidationResult,
-    check_null_values,
-    check_temperature_range,
-    check_completeness,
-    check_temporal_continuity,
-    check_baseline_integrity,
-)
+
+from .rule import RuleFunction
+from .rules import ValidationResult
 
 
-class Validator:
-    """Runs all validation rules against a GISTEMP DataFrame."""
+def collect_rejected_rows(df: pd.DataFrame, results: list[ValidationResult]) -> list[dict]:
+    """Return structured dicts for every hard-rejected row that has a row_index.
 
-    RULE_NAMES = [
-        'null_check',
-        'range_check',
-        'completeness_check',
-        'temporal_continuity',
-        'baseline_integrity',
-    ]
-
-    def validate(self, df: pd.DataFrame) -> list[ValidationResult]:
-        results: list[ValidationResult] = []
-
-        # Row-level rules
-        for idx, row in df.iterrows():
-            results.extend(check_null_values(row, idx))
-            results.extend(check_temperature_range(row, idx))
-            results.extend(check_completeness(row, idx))
-
-        # DataFrame-level rules
-        results.extend(check_temporal_continuity(df))
-        results.extend(check_baseline_integrity(df))
-
-        return results
-
-    def get_clean(self, df: pd.DataFrame,
-                  results: list[ValidationResult]) -> pd.DataFrame:
-        """Return rows with no hard_rejection results."""
-        rejected_indices = {
-            r.row_index for r in results
-            if r.severity == 'hard_rejection' and r.row_index is not None
-        }
-        return df.drop(index=list(rejected_indices)).reset_index(drop=True)
-
-    def rejection_summary(self, results: list[ValidationResult]) -> dict:
-        summary: dict[str, int] = {}
-        for r in results:
-            if r.severity == 'hard_rejection':
-                summary[r.rule_name] = summary.get(r.rule_name, 0) + 1
-        return summary
-
-    def warning_summary(self, results: list[ValidationResult]) -> dict:
-        summary: dict[str, int] = {}
-        for r in results:
-            if r.severity == 'warning':
-                summary[r.rule_name] = summary.get(r.rule_name, 0) + 1
-        return summary
-
-
-def collect_rejected_rows(df: pd.DataFrame, results: list) -> list[dict]:
-    """Return structured dicts for every hard-rejected row (with a row_index)."""
+    Used by the pipeline to persist per-row rejection detail to the store's
+    rejections table, which feeds the dashboard and /runs/{id}/rejections API.
+    """
     collected = []
     for r in results:
-        if r.severity != 'hard_rejection' or r.row_index is None:
+        if r.severity != "hard_rejection" or r.row_index is None:
             continue
         try:
             row_data = df.iloc[r.row_index].to_json()
@@ -78,3 +42,64 @@ def collect_rejected_rows(df: pd.DataFrame, results: list) -> list[dict]:
             "row_data": row_data,
         })
     return collected
+
+
+class Validator:
+    """Run a list of RuleFunctions against a DataFrame.
+
+    Row-level rules are applied once per row.
+    DataFrame-level rules are applied once to the full DataFrame.
+
+    Args:
+        rules: Ordered list of RuleFunction objects produced by the @rule decorator.
+    """
+
+    def __init__(self, rules: list[RuleFunction]) -> None:
+        if not rules:
+            raise ValueError(
+                "Validator requires at least one rule. "
+                "Pass a list of @rule-decorated functions, e.g. "
+                "Validator(rules=GISTEMP_RULES)."
+            )
+        self._row_rules = [r for r in rules if r.kind == "row"]
+        self._df_rules = [r for r in rules if r.kind == "dataframe"]
+        self.rule_names: list[str] = [r.name for r in rules]
+
+    def validate(self, df: pd.DataFrame) -> list[ValidationResult]:
+        """Run all rules against df. Returns every failure as a ValidationResult."""
+        results: list[ValidationResult] = []
+
+        for idx, row in df.iterrows():
+            for rule in self._row_rules:
+                results.extend(rule(row, int(idx)))
+
+        for rule in self._df_rules:
+            results.extend(rule(df))
+
+        return results
+
+    def get_clean(self, df: pd.DataFrame,
+                  results: list[ValidationResult]) -> pd.DataFrame:
+        """Return df with hard-rejected rows removed."""
+        rejected = {
+            r.row_index
+            for r in results
+            if r.severity == "hard_rejection" and r.row_index is not None
+        }
+        return df.drop(index=list(rejected)).reset_index(drop=True)
+
+    def rejection_summary(self, results: list[ValidationResult]) -> dict[str, int]:
+        """Count hard rejections per rule name."""
+        summary: dict[str, int] = {}
+        for r in results:
+            if r.severity == "hard_rejection":
+                summary[r.rule_name] = summary.get(r.rule_name, 0) + 1
+        return summary
+
+    def warning_summary(self, results: list[ValidationResult]) -> dict[str, int]:
+        """Count warnings per rule name."""
+        summary: dict[str, int] = {}
+        for r in results:
+            if r.severity == "warning":
+                summary[r.rule_name] = summary.get(r.rule_name, 0) + 1
+        return summary

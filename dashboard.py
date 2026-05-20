@@ -1,21 +1,16 @@
 """
 ProvenanceFlow Dashboard
 Run: streamlit run dashboard.py
-Requires: python demo.py first (to populate the provenance store).
 """
 import ast
-import io
-import json
 
 import pandas as pd
 import streamlit as st
 
 from src.provenanceflow.provenance.store import ProvenanceStore
-from src.provenanceflow.provenance.query import (
-    get_run, list_runs, get_entities, get_activities,
-)
+from src.provenanceflow.provenance.query import get_run, list_runs
+from src.provenanceflow.provenance.compare import compare_runs
 
-# ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title='ProvenanceFlow',
     page_icon='🔬',
@@ -25,15 +20,29 @@ st.set_page_config(
 
 DB_PATH = 'provenance_store/lineage.db'
 
-# ── Data helpers ──────────────────────────────────────────────────────────────
+SEVERITY_LABELS = {
+    'hard_rejection': 'Hard Rejection',
+    'warning': 'Warning',
+}
+
+RULE_DESCRIPTIONS = {
+    'null_check':           'Missing monthly temperature values',
+    'range_check':          'Annual mean outside [-3.0, +3.0]°C',
+    'completeness_check':   'More than 3 monthly values missing',
+    'temporal_continuity':  'Gap in the year sequence',
+    'baseline_integrity':   'Incomplete 1951–1980 anomaly baseline',
+    'row_null_rate':        'Too many null values in this row',
+    'column_completeness':  'Column has high null rate',
+}
+
+
+# ── PROV-JSON navigation helpers ───────────────────────────────────────────────
 
 def _unwrap(v):
-    """PROV-JSON stores typed literals as {'$': value, 'type': '...'}."""
     return v['$'] if isinstance(v, dict) and '$' in v else v
 
 
 def _parse_dict_attr(v) -> dict:
-    """Activity attributes like rejections_by_rule are stored as str(dict)."""
     try:
         return ast.literal_eval(str(v)) if v else {}
     except Exception:
@@ -47,19 +56,34 @@ def _get_ingestion_entity(doc: dict) -> dict:
     return {}
 
 
-def _get_validation_activity(doc: dict) -> dict:
+def _get_processing_activity(doc: dict) -> tuple[dict, str]:
+    """Return (attrs, kind) — kind is 'validation' or 'transformation'."""
     for aid, attrs in doc.get('activity', {}).items():
         if 'validate_' in aid:
-            return attrs
-    return {}
+            return attrs, 'validation'
+    for aid, attrs in doc.get('activity', {}).items():
+        if 'transform_' in aid:
+            return attrs, 'transformation'
+    return {}, 'unknown'
 
 
-def _get_validated_entity(doc: dict) -> dict:
+def _get_output_entity(doc: dict) -> dict:
     for eid, attrs in doc.get('entity', {}).items():
         if 'validated_' in eid:
             return attrs
+    for eid, attrs in doc.get('entity', {}).items():
+        if 'transformed_' in eid:
+            return attrs
     return {}
 
+
+def _short_id(name: str) -> str:
+    for prefix in ('pf:', 'prov:', 'fair:', 'dc:', 'schema:'):
+        name = name.replace(prefix, '')
+    return name
+
+
+# ── Store + run enrichment ─────────────────────────────────────────────────────
 
 @st.cache_resource
 def _get_store() -> ProvenanceStore:
@@ -67,166 +91,207 @@ def _get_store() -> ProvenanceStore:
 
 
 def _enrich_runs(store: ProvenanceStore) -> list[dict]:
-    """Augment bare run metadata with key metrics from PROV-JSON."""
     enriched = []
     for run_meta in store.list_runs():
         doc = store.get(run_meta['run_id'])
         if not doc:
             continue
         ing = _get_ingestion_entity(doc)
-        val = _get_validation_activity(doc)
-        enriched.append({
-            'run_id':         run_meta['run_id'],
-            'created_at':     run_meta['created_at'],
-            'rows_in':        _unwrap(val.get('pf:rows_in', '—')),
-            'rows_passed':    _unwrap(val.get('pf:rows_passed', '—')),
-            'rows_rejected':  _unwrap(val.get('pf:rows_rejected', '—')),
-            'rejection_rate': _unwrap(val.get('pf:rejection_rate', None)),
-            'source_url':     ing.get('fair:source_url', '—'),
-        })
+        val, kind = _get_processing_activity(doc)
+
+        row = {
+            'run_id':     run_meta['run_id'],
+            'created_at': run_meta['created_at'],
+            'type':       '🔬 Pipeline' if kind == 'validation' else '⚡ @track',
+            'source':     (ing.get('dc:title') or ing.get('fair:source_url') or '—'),
+        }
+
+        if kind == 'validation':
+            row['rows_in']     = _unwrap(val.get('pf:rows_in', '—'))
+            row['rows_passed'] = _unwrap(val.get('pf:rows_passed', '—'))
+            rate               = _unwrap(val.get('pf:rejection_rate', None))
+            row['rejection_%'] = f'{float(rate)*100:.2f}' if rate is not None else '—'
+        else:
+            row['rows_in']     = _unwrap(val.get('pf:rows_in', '—'))
+            row['rows_passed'] = _unwrap(val.get('pf:rows_out', '—'))
+            row['rejection_%'] = '—'
+            fn = val.get('pf:function_name')
+            if fn:
+                row['source'] = fn
+
+        enriched.append(row)
     return enriched
 
 
-# ── PROV graph builder ────────────────────────────────────────────────────────
+# ── Lineage graph builder ──────────────────────────────────────────────────────
 
-def _build_prov_graph(doc: dict) -> bytes | None:
-    """Render the PROV entity-activity-agent graph as PNG bytes via pydot."""
+def _build_lineage_graph(doc: dict):
     try:
         import pydot
     except ImportError:
         return None
 
     graph = pydot.Dot('provenance', graph_type='digraph', rankdir='LR',
-                      fontname='Helvetica', bgcolor='#fafafa')
-    graph.set_graph_defaults(pad='0.5', nodesep='0.5', ranksep='0.8')
+                      fontname='Helvetica', bgcolor='transparent')
+    graph.set_graph_defaults(pad='0.5', nodesep='0.6', ranksep='0.9')
 
-    def _short(name: str) -> str:
-        return name.replace('pf:', '').replace('prov:', '')
-
-    node_map: dict[str, pydot.Node] = {}
-
-    # Entities — boxes
     for eid in doc.get('entity', {}):
-        label = _short(eid)
-        color = '#4A90D9' if 'dataset_' in eid else '#27AE60'
-        n = pydot.Node(
-            f'"{eid}"', label=f'"{label}"', shape='box',
-            style='filled', fillcolor=color, fontcolor='white',
-            fontname='Helvetica', fontsize='11',
-        )
-        graph.add_node(n)
-        node_map[eid] = n
+        color = '#4F8BF9' if 'dataset_' in eid else '#27AE60'
+        graph.add_node(pydot.Node(
+            f'"{eid}"', label=f'"{_short_id(eid)}"', shape='box',
+            style='filled,rounded', fillcolor=color,
+            fontcolor='white', fontname='Helvetica', fontsize='11',
+        ))
 
-    # Activities — ellipses
     for aid in doc.get('activity', {}):
-        label = _short(aid)
-        n = pydot.Node(
-            f'"{aid}"', label=f'"{label}"', shape='ellipse',
-            style='filled', fillcolor='#E67E22', fontcolor='white',
-            fontname='Helvetica', fontsize='11',
-        )
-        graph.add_node(n)
-        node_map[aid] = n
+        color = '#E67E22' if 'validate_' in aid else '#9B59B6'
+        graph.add_node(pydot.Node(
+            f'"{aid}"', label=f'"{_short_id(aid)}"', shape='ellipse',
+            style='filled', fillcolor=color,
+            fontcolor='white', fontname='Helvetica', fontsize='11',
+        ))
 
-    # Agents — diamonds
     for agid in doc.get('agent', {}):
-        label = _short(agid)
-        n = pydot.Node(
-            f'"{agid}"', label=f'"{label}"', shape='diamond',
-            style='filled', fillcolor='#95A5A6', fontcolor='white',
-            fontname='Helvetica', fontsize='11',
-        )
-        graph.add_node(n)
-        node_map[agid] = n
+        graph.add_node(pydot.Node(
+            f'"{agid}"', label=f'"{_short_id(agid)}"', shape='diamond',
+            style='filled', fillcolor='#7F8C8D',
+            fontcolor='white', fontname='Helvetica', fontsize='11',
+        ))
 
-    def _add_edges(relation_key: str, tail_key: str, head_key: str, label: str,
-                   color: str = '#555555'):
-        for rel in doc.get(relation_key, {}).values():
+    def _add_edges(rel_key, tail_key, head_key, label, color='#555555'):
+        for rel in doc.get(rel_key, {}).values():
             if not isinstance(rel, dict):
                 continue
-            tail = rel.get(tail_key)
-            head = rel.get(head_key)
+            tail, head = rel.get(tail_key), rel.get(head_key)
             if tail and head:
                 graph.add_edge(pydot.Edge(
                     f'"{tail}"', f'"{head}"',
-                    label=f'"{label}"', fontsize='9', fontcolor=color,
-                    color=color, fontname='Helvetica',
+                    label=f'"{label}"', fontsize='9',
+                    fontcolor=color, color=color, fontname='Helvetica',
                 ))
 
-    _add_edges('wasGeneratedBy',   'prov:activity', 'prov:entity',   'wasGeneratedBy', '#27AE60')
-    _add_edges('used',             'prov:activity',  'prov:entity',  'used',            '#4A90D9')
-    _add_edges('wasDerivedFrom',   'prov:generatedEntity', 'prov:usedEntity', 'wasDerivedFrom', '#8E44AD')
-    _add_edges('wasAssociatedWith','prov:activity',  'prov:agent',   'wasAssociatedWith','#95A5A6')
+    _add_edges('wasGeneratedBy',    'prov:activity',        'prov:entity',     'wasGeneratedBy',    '#27AE60')
+    _add_edges('used',              'prov:activity',        'prov:entity',     'used',              '#4F8BF9')
+    _add_edges('wasDerivedFrom',    'prov:generatedEntity', 'prov:usedEntity', 'wasDerivedFrom',    '#8E44AD')
+    _add_edges('wasAssociatedWith', 'prov:activity',        'prov:agent',      'wasAssociatedWith', '#7F8C8D')
 
     try:
-        png = graph.create_png()
-        return png
+        return graph.create_png()
     except Exception:
         return None
 
 
-# ── Sidebar ───────────────────────────────────────────────────────────────────
+def _lineage_fallback_text(doc: dict) -> str:
+    """Human-readable lineage summary when graphviz is unavailable."""
+    lines = []
+    entities   = {eid: attrs for eid, attrs in doc.get('entity', {}).items()}
+    activities = {aid: attrs for aid, attrs in doc.get('activity', {}).items()}
 
-def _sidebar(run_ids: list[str]) -> tuple[str, str | None]:
+    def label(key):
+        attrs = entities.get(key) or activities.get(key) or {}
+        return attrs.get('prov:label') or _short_id(key)
+
+    for rel in doc.get('wasGeneratedBy', {}).values():
+        if isinstance(rel, dict):
+            e, a = rel.get('prov:entity'), rel.get('prov:activity')
+            if e and a:
+                lines.append(f'**{label(e)}** was generated by **{label(a)}**')
+
+    for rel in doc.get('used', {}).values():
+        if isinstance(rel, dict):
+            a, e = rel.get('prov:activity'), rel.get('prov:entity')
+            if a and e:
+                lines.append(f'**{label(a)}** used **{label(e)}** as input')
+
+    for rel in doc.get('wasDerivedFrom', {}).values():
+        if isinstance(rel, dict):
+            out = rel.get('prov:generatedEntity')
+            inp = rel.get('prov:usedEntity')
+            if out and inp:
+                lines.append(f'**{label(out)}** was derived from **{label(inp)}**')
+
+    return '  \n'.join(lines) if lines else 'No lineage relationships found in this record.'
+
+
+# ── Sidebar ────────────────────────────────────────────────────────────────────
+
+def _sidebar(run_ids: list[str]) -> tuple[str, str | None, str | None]:
     with st.sidebar:
         st.markdown('## 🔬 ProvenanceFlow')
         st.markdown(
-            '*FAIR-compliant data lineage tracker*  \n'
-            'W3C PROV · Dublin Core · Schema.org'
+            'Shows you **exactly what happened to your data** in each pipeline run — '
+            'what was filtered, which rule triggered it, and how results changed over time.'
         )
         st.divider()
+
         page = st.radio(
             'Navigate',
-            ['Overview', 'Run Detail', 'PROV Graph'],
+            ['Overview', 'Run Detail', 'Lineage Graph', 'Compare Runs'],
             label_visibility='collapsed',
+            captions=[
+                'All runs at a glance',
+                'What happened in one run',
+                'Visual flow from input to output',
+                'How two runs differ',
+            ],
         )
         st.divider()
-        selected_run = None
-        if run_ids and page in ('Run Detail', 'PROV Graph'):
-            selected_run = st.selectbox('Select run', run_ids)
+
+        selected_run  = None
+        compare_run_b = None
+
+        if run_ids:
+            if page in ('Run Detail', 'Lineage Graph'):
+                selected_run = st.selectbox('Select run', run_ids)
+            elif page == 'Compare Runs':
+                st.caption('**Baseline run**')
+                selected_run  = st.selectbox('Run A', run_ids, key='run_a')
+                st.caption('**Run to compare**')
+                compare_run_b = st.selectbox('Run B', run_ids, key='run_b',
+                                             index=min(1, len(run_ids) - 1))
+
         st.divider()
         st.caption('Standards')
         st.markdown(
-            '- [W3C PROV-DM](https://www.w3.org/TR/prov-dm/)\n'
+            '- [W3C PROV](https://www.w3.org/TR/prov-dm/)\n'
             '- [FAIR Principles](https://doi.org/10.1038/sdata.2016.18)\n'
-            '- [Dublin Core](https://www.dublincore.org/specifications/dublin-core/dcmi-terms/)\n'
-            '- [Schema.org](https://schema.org/Dataset)'
+            '- [RO-Crate](https://www.researchobject.org/ro-crate/)\n'
+            '- [Dublin Core](https://www.dublincore.org/specifications/dublin-core/dcmi-terms/)'
         )
-    return page, selected_run
+
+    return page, selected_run, compare_run_b
 
 
 # ── Page: Overview ────────────────────────────────────────────────────────────
 
 def _page_overview(runs: list[dict]):
-    st.header('Pipeline Runs — Overview')
+    st.header('Pipeline Runs')
+    st.caption('Each row is one execution of your data pipeline. Select a run in the sidebar to inspect it.')
 
     if not runs:
-        st.info('No runs yet. Run `python demo.py` first to populate the provenance store.')
+        st.info(
+            'No runs recorded yet.  \n'
+            'Run `provenanceflow run` in your terminal, or `python demo.py` to create your first provenance record.'
+        )
         return
 
-    # Metric cards
-    total_runs = len(runs)
-    latest_rate = runs[0].get('rejection_rate')
-    total_rows_in = sum(r['rows_in'] for r in runs if isinstance(r.get('rows_in'), (int, float)))
-    total_rows_passed = sum(r['rows_passed'] for r in runs if isinstance(r.get('rows_passed'), (int, float)))
+    pipeline_runs = [r for r in runs if '🔬' in r['type']]
+    track_runs    = [r for r in runs if '⚡' in r['type']]
+    valid_rates   = [float(r['rejection_%']) for r in runs if r.get('rejection_%') not in ('—', None)]
+    latest_rate   = valid_rates[0] if valid_rates else None
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric('Total Runs', total_runs)
-    c2.metric(
-        'Latest Rejection Rate',
-        f"{float(latest_rate)*100:.2f} %" if latest_rate is not None else '—',
-    )
-    c3.metric('Total Rows Processed', f'{total_rows_in:,}' if total_rows_in else '—')
-    c4.metric('Total Rows Passed', f'{total_rows_passed:,}' if total_rows_passed else '—')
+    c1.metric('Total Runs',     len(runs))
+    c2.metric('Pipeline Runs',  len(pipeline_runs),
+              help='Full ingest → validate → track pipeline runs')
+    c3.metric('@track Runs',    len(track_runs),
+              help='Runs captured by the @track decorator on individual functions')
+    c4.metric('Latest Rejection %',
+              f'{latest_rate:.2f} %' if latest_rate is not None else '—',
+              help='Percentage of input rows rejected in the most recent pipeline run')
 
     st.divider()
-
-    # Runs table
     df = pd.DataFrame(runs)
-    if 'rejection_rate' in df.columns:
-        df['rejection_rate'] = df['rejection_rate'].apply(
-            lambda x: f'{float(x)*100:.2f} %' if x is not None else '—'
-        )
     df.columns = [c.replace('_', ' ').title() for c in df.columns]
     st.dataframe(df, use_container_width=True, hide_index=True)
 
@@ -236,162 +301,277 @@ def _page_overview(runs: list[dict]):
 def _page_run_detail(store: ProvenanceStore, run_id: str):
     doc = get_run(store, run_id)
     if not doc:
-        st.error(f'Run `{run_id}` not found.')
+        st.error(f'Run `{run_id}` not found. Select a different run in the sidebar.')
         return
 
     ing = _get_ingestion_entity(doc)
-    val = _get_validation_activity(doc)
-    out = _get_validated_entity(doc)
+    val, kind = _get_processing_activity(doc)
+    out = _get_output_entity(doc)
 
-    st.header(f'Run Detail — `{run_id}`')
+    badge = '🔬 Pipeline Run' if kind == 'validation' else '⚡ @track Decorator Run'
+    st.header(badge)
+    st.caption(f'`{run_id}`')
 
-    # ── Source Dataset ─────────────────────────────────────────────────────
-    with st.expander('📦 Source Dataset', expanded=True):
+    # ── Source ─────────────────────────────────────────────────────────────
+    with st.expander('📦 Input Dataset', expanded=True):
         col1, col2 = st.columns(2)
         with col1:
-            st.markdown(f"**Title:** {ing.get('dc:title', '—')}")
-            st.markdown(f"**Source URL:** {ing.get('fair:source_url', '—')}")
+            st.markdown(f"**Name:** {ing.get('dc:title', '—')}")
+            st.markdown(f"**Source:** {ing.get('fair:source_url', '—')}")
             st.markdown(f"**Format:** {ing.get('dc:format', '—')}")
-            st.markdown(f"**License:** {ing.get('dc:license', '—')}")
         with col2:
-            st.markdown(f"**FAIR Identifier:** `{ing.get('fair:identifier', '—')}`")
-            st.markdown(f"**Ingested:** {ing.get('pf:ingest_timestamp', '—')}")
+            st.markdown(f"**Run identifier:** `{ing.get('fair:identifier', '—')}`")
+            st.markdown(f"**Recorded at:** {ing.get('pf:ingest_timestamp', '—')}")
             rc = _unwrap(ing.get('pf:row_count', '—'))
-            st.markdown(f"**Row Count:** {rc:,}" if isinstance(rc, int) else f"**Row Count:** {rc}")
-            st.markdown(f"**SHA-256:** `{ing.get('pf:checksum_sha256', '—')[:24]}…`")
+            st.markdown(f"**Rows:** {rc:,}" if isinstance(rc, int) else f"**Rows:** {rc}")
+            chk = ing.get('pf:checksum_sha256', '')
+            if chk:
+                st.markdown(f"**Fingerprint (SHA-256):** `{chk[:24]}…`",
+                            help='A unique fingerprint of the input file — if this matches another run, both used identical input data')
 
-    # ── FAIR + DC / Schema.org Metadata ───────────────────────────────────
-    with st.expander('🏷️ FAIR + Dublin Core / Schema.org Metadata'):
-        col1, col2 = st.columns(2)
-        with col1:
-            st.markdown('**Dublin Core**')
-            for key in ('dc:title', 'dc:identifier', 'dc:source', 'dc:format',
-                        'dc:created', 'dc:type', 'dc:license'):
-                if key in ing:
-                    st.markdown(f'- `{key}`: {ing[key]}')
-        with col2:
-            st.markdown('**Schema.org**')
-            for key in ('schema:name', 'schema:url', 'schema:encodingFormat'):
-                if key in ing:
-                    st.markdown(f'- `{key}`: {ing[key]}')
+    # ── Processing ─────────────────────────────────────────────────────────
+    if kind == 'validation':
+        st.subheader('Validation Results')
 
-    # ── Validation Summary ─────────────────────────────────────────────────
-    st.subheader('Validation Summary')
+        rows_in  = _unwrap(val.get('pf:rows_in',       0)) or 0
+        rows_out = _unwrap(val.get('pf:rows_passed',    0)) or 0
+        rows_rej = _unwrap(val.get('pf:rows_rejected',  0)) or 0
+        rate     = _unwrap(val.get('pf:rejection_rate', None))
 
-    rows_in  = _unwrap(val.get('pf:rows_in', 0)) or 0
-    rows_out = _unwrap(val.get('pf:rows_passed', 0)) or 0
-    rows_rej = _unwrap(val.get('pf:rows_rejected', 0)) or 0
-    rate     = _unwrap(val.get('pf:rejection_rate', None))
+        c1, c2, c3 = st.columns(3)
+        c1.metric('Rows In',       f'{rows_in:,}'  if isinstance(rows_in,  int) else rows_in)
+        c2.metric('Rows Passed',   f'{rows_out:,}' if isinstance(rows_out, int) else rows_out)
+        c3.metric('Rows Rejected', f'{rows_rej:,}' if isinstance(rows_rej, int) else rows_rej,
+                  delta=f'-{rows_rej}' if isinstance(rows_rej, int) and rows_rej > 0 else None,
+                  delta_color='inverse',
+                  help='Rows removed because they failed a Hard Rejection rule')
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric('Rows In',      f'{rows_in:,}' if isinstance(rows_in, int) else rows_in)
-    c2.metric('Rows Passed',  f'{rows_out:,}' if isinstance(rows_out, int) else rows_out, delta=None)
-    c3.metric('Rows Rejected', f'{rows_rej:,}' if isinstance(rows_rej, int) else rows_rej,
-              delta=f'-{rows_rej}' if isinstance(rows_rej, int) and rows_rej > 0 else None,
-              delta_color='inverse')
+        if rate is not None:
+            pct = float(rate) * 100
+            msg = f'**{pct:.2f}%** of input rows were rejected'
+            st.error(msg) if pct > 5 else (st.warning(msg) if pct > 0 else st.success('All rows passed — 0% rejection rate'))
 
-    if rate is not None:
-        pct = float(rate) * 100
-        msg = f'Rejection rate: **{pct:.2f} %**'
-        if pct > 5:
-            st.error(msg)
-        else:
-            st.success(msg)
+        # Rules applied
+        rules_raw = val.get('pf:rules_applied', '')
+        rules = [r.strip() for r in rules_raw.split(',') if r.strip()]
+        if rules:
+            st.markdown('**Rules checked:**')
+            for r in rules:
+                desc = RULE_DESCRIPTIONS.get(r, '')
+                st.markdown(f'- `{r}`{"  — " + desc if desc else ""}')
 
-    # Rules applied pills
-    rules_raw = val.get('pf:rules_applied', '')
-    rules = [r.strip() for r in rules_raw.split(',') if r.strip()]
-    if rules:
-        st.markdown('**Rules Applied:**')
-        cols = st.columns(min(len(rules), 5))
-        for i, rule in enumerate(rules):
-            cols[i % len(cols)].markdown(
-                f'<span style="background:#4A90D9;color:white;padding:3px 8px;'
-                f'border-radius:12px;font-size:0.8em">{rule}</span>',
-                unsafe_allow_html=True,
-            )
+        # Rejection charts
+        rejections = _parse_dict_attr(val.get('pf:rejections_by_rule'))
+        warnings   = _parse_dict_attr(val.get('pf:warnings_by_rule'))
 
-    # Bar charts
-    rejections = _parse_dict_attr(val.get('pf:rejections_by_rule'))
-    warnings   = _parse_dict_attr(val.get('pf:warnings_by_rule'))
+        if rejections or warnings:
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown('**Hard Rejections by Rule** *(row removed)*')
+                st.bar_chart(pd.Series(rejections)) if rejections else st.caption('None')
+            with col2:
+                st.markdown('**Warnings by Rule** *(row kept, flagged)*')
+                st.bar_chart(pd.Series(warnings)) if warnings else st.caption('None')
 
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown('**Hard Rejections by Rule**')
-        if rejections:
-            st.bar_chart(pd.Series(rejections))
-        else:
-            st.caption('None')
-    with col2:
-        st.markdown('**Warnings by Rule**')
-        if warnings:
-            st.bar_chart(pd.Series(warnings))
-        else:
-            st.caption('None')
+        # Rejected rows table
+        rejected_rows = store.get_rejections(run_id)
+        if rejected_rows:
+            with st.expander(f'🔍 Why were rows rejected? ({len(rejected_rows)} rows)'):
+                rdf = pd.DataFrame(rejected_rows)[['row_index', 'rule', 'severity', 'message']]
+                rdf['severity'] = rdf['severity'].map(SEVERITY_LABELS).fillna(rdf['severity'])
+                rdf.columns = ['Row #', 'Rule', 'Severity', 'Rejection Reason']
+                st.dataframe(rdf, use_container_width=True, hide_index=True)
 
-    # Validated output
+    else:
+        # @track decorator run
+        st.subheader('Transformation Result')
+        fn       = val.get('pf:function_name', '—')
+        rows_in  = _unwrap(val.get('pf:rows_in',  '—'))
+        rows_out = _unwrap(val.get('pf:rows_out', '—'))
+        chk_in   = val.get('pf:checksum_in',  '')
+        chk_out  = val.get('pf:checksum_out', '')
+
+        st.markdown(f'**Function:** `{fn}`')
+        c1, c2, c3 = st.columns(3)
+        c1.metric('Rows In',    f'{rows_in:,}'  if isinstance(rows_in,  int) else rows_in)
+        c2.metric('Rows Out',   f'{rows_out:,}' if isinstance(rows_out, int) else rows_out)
+        if isinstance(rows_in, int) and isinstance(rows_out, int):
+            dropped = rows_in - rows_out
+            c3.metric('Rows Dropped', dropped,
+                      delta=f'-{dropped}' if dropped > 0 else None,
+                      delta_color='inverse')
+
+        if chk_in:
+            same = (chk_in == chk_out)
+            st.markdown(f'**Input fingerprint:** `{str(chk_in)[:24]}…`')
+            if chk_out:
+                st.markdown(f'**Output fingerprint:** `{str(chk_out)[:24]}…`')
+                if same:
+                    st.warning('Input and output fingerprints match — function returned the data unchanged.')
+
+    # Output entity
     if out:
-        with st.expander('✅ Validated Output Entity'):
-            for key in ('dc:title', 'fair:identifier', 'dc:isVersionOf'):
-                if key in out:
-                    st.markdown(f'- `{key}`: {out[key]}')
+        with st.expander('✅ Output Dataset'):
             vc = _unwrap(out.get('pf:row_count', '—'))
-            st.markdown(f'- `pf:row_count`: {vc:,}' if isinstance(vc, int) else f'- `pf:row_count`: {vc}')
+            st.markdown(f'**Rows:** {vc:,}' if isinstance(vc, int) else f'**Rows:** {vc}')
+            st.markdown(f"**Identifier:** `{out.get('fair:identifier', '—')}`")
 
-    # Raw PROV-JSON
-    with st.expander('📄 Raw W3C PROV-JSON'):
+    with st.expander('📄 Raw Provenance Record (W3C PROV-JSON)'):
         st.json(doc)
 
 
-# ── Page: PROV Graph ──────────────────────────────────────────────────────────
+# ── Page: Lineage Graph ───────────────────────────────────────────────────────
 
-def _page_prov_graph(store: ProvenanceStore, run_id: str):
+def _page_lineage_graph(store: ProvenanceStore, run_id: str):
     doc = get_run(store, run_id)
     if not doc:
-        st.error(f'Run `{run_id}` not found.')
+        st.error(f'Run `{run_id}` not found. Select a different run in the sidebar.')
         return
 
-    st.header(f'PROV Lineage Graph — `{run_id}`')
+    st.header('Lineage Graph')
+    st.caption(f'Visual W3C PROV entity-activity-agent graph for `{run_id}`')
 
-    png = _build_prov_graph(doc)
+    png = _build_lineage_graph(doc)
     if png:
-        st.image(png, caption='W3C PROV entity-activity-agent graph', use_container_width=True)
+        st.image(png, use_container_width=True)
         st.caption(
-            '🟦 Raw dataset entity  ·  🟩 Validated dataset entity  ·  '
-            '🟠 Activity  ·  ⬜ Agent'
+            '🟦 Raw input dataset  ·  🟩 Validated/transformed output  ·  '
+            '🟠 Validation activity  ·  🟣 Transform activity  ·  🔘 Agent (ProvenanceFlow)'
         )
     else:
-        st.warning(
-            'Graph rendering unavailable. Ensure `graphviz` is installed on your system '
-            '(`apt install graphviz` or `brew install graphviz`).'
-        )
-        st.markdown('Raw PROV relationships:')
-        for rel in ('wasGeneratedBy', 'used', 'wasDerivedFrom', 'wasAssociatedWith'):
-            if rel in doc:
-                st.markdown(f'**{rel}**: {list(doc[rel].keys())}')
+        st.warning('Graph image unavailable — graphviz binary not found on this system.')
+        st.markdown('**Lineage summary for this run:**')
+        st.markdown(_lineage_fallback_text(doc))
+
+
+# ── Page: Compare Runs ────────────────────────────────────────────────────────
+
+def _page_compare(store: ProvenanceStore, run_id_a: str, run_id_b: str):
+    st.header('Compare Runs')
+
+    if run_id_a == run_id_b:
+        st.warning('Select two different runs to compare.')
+        return
+
+    try:
+        diff = compare_runs(run_id_a, run_id_b, store)
+    except ValueError as e:
+        st.error(str(e))
+        return
+
+    # Banner
+    delta = diff.delta_rejection_rate
+    if delta < 0:
+        st.success(f'✅ {diff.summary}')
+    elif delta > 0:
+        st.error(f'❌ {diff.summary}')
+    else:
+        st.info(f'➡️ {diff.summary}')
+
+    st.divider()
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown(f'**Run A** (baseline)  \n`{run_id_a}`')
+        st.metric('Rows Passed',    diff.rows_passed_a)
+        st.metric('Rejection Rate', f'{diff.rejection_rate_a*100:.2f} %')
+        if diff.source_url_a != '—':
+            st.caption(f'Source: {diff.source_url_a}')
+
+    with col2:
+        st.markdown(f'**Run B** (comparison)  \n`{run_id_b}`')
+        # delta_color='normal': more rows passed = green up = good
+        st.metric('Rows Passed',    diff.rows_passed_b,
+                  delta=diff.delta_rows_passed,
+                  delta_color='normal')
+        # delta_color='inverse': higher rejection rate = red even though positive = bad
+        st.metric('Rejection Rate', f'{diff.rejection_rate_b*100:.2f} %',
+                  delta=f'{diff.delta_rejection_rate*100:+.2f} %',
+                  delta_color='inverse')
+        if diff.source_url_b != '—':
+            st.caption(f'Source: {diff.source_url_b}')
+
+    st.divider()
+
+    # Dataset + rules status
+    col1, col2 = st.columns(2)
+    with col1:
+        if diff.same_dataset:
+            st.success('✅ Same input dataset (identical SHA-256 fingerprint)',
+                       icon=None)
+            st.caption('Any difference in output is due to rule changes, not different input data.')
+        else:
+            st.warning('⚠️ Different input datasets')
+            st.caption('Output differences may reflect different input data, not just rule changes.')
+    with col2:
+        if diff.same_rules:
+            st.success('✅ Same validation rules applied')
+        else:
+            st.warning('⚠️ Different rules applied between runs')
+
+    # Per-rule rejection breakdown
+    st.divider()
+    st.subheader('Rejection Breakdown by Rule')
+
+    doc_a = store.get(run_id_a)
+    doc_b = store.get(run_id_b)
+    val_a, _ = _get_processing_activity(doc_a or {})
+    val_b, _ = _get_processing_activity(doc_b or {})
+    rej_a = _parse_dict_attr(val_a.get('pf:rejections_by_rule'))
+    rej_b = _parse_dict_attr(val_b.get('pf:rejections_by_rule'))
+    warn_a = _parse_dict_attr(val_a.get('pf:warnings_by_rule'))
+    warn_b = _parse_dict_attr(val_b.get('pf:warnings_by_rule'))
+
+    all_rules = sorted(set(rej_a) | set(rej_b) | set(warn_a) | set(warn_b))
+
+    if all_rules:
+        rows = []
+        for r in all_rules:
+            ra, rb = rej_a.get(r, 0), rej_b.get(r, 0)
+            wa, wb = warn_a.get(r, 0), warn_b.get(r, 0)
+            rows.append({
+                'Rule':               r,
+                'Rejections A':       ra,
+                'Rejections B':       rb,
+                'Rejection Δ':        rb - ra,
+                'Warnings A':         wa,
+                'Warnings B':         wb,
+            })
+        df = pd.DataFrame(rows)
+        st.dataframe(df, use_container_width=True, hide_index=True)
+    else:
+        st.caption('No rejections or warnings in either run.')
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
-    store = _get_store()
-    runs = _enrich_runs(store)
+    store   = _get_store()
+    runs    = _enrich_runs(store)
     run_ids = [r['run_id'] for r in runs]
 
-    page, selected_run = _sidebar(run_ids)
+    page, selected_run, compare_run_b = _sidebar(run_ids)
 
     if page == 'Overview':
         _page_overview(runs)
+
     elif page == 'Run Detail':
         if not run_ids:
-            st.info('No runs yet. Run `python demo.py` first.')
+            st.info('No runs yet. Run `provenanceflow run` or `python demo.py` first.')
         else:
             _page_run_detail(store, selected_run or run_ids[0])
-    elif page == 'PROV Graph':
+
+    elif page == 'Lineage Graph':
         if not run_ids:
-            st.info('No runs yet. Run `python demo.py` first.')
+            st.info('No runs yet. Run `provenanceflow run` or `python demo.py` first.')
         else:
-            _page_prov_graph(store, selected_run or run_ids[0])
+            _page_lineage_graph(store, selected_run or run_ids[0])
+
+    elif page == 'Compare Runs':
+        if len(run_ids) < 2:
+            st.info('Need at least 2 runs to compare. Run the pipeline more than once.')
+        else:
+            _page_compare(store, selected_run or run_ids[0], compare_run_b or run_ids[1])
 
 
 if __name__ == '__main__':
