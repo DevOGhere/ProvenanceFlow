@@ -61,7 +61,7 @@ def track(_func=None, *, title: str | None = None, db_path: str | None = None):
 
     Args:
         title:   Human-readable label stored as dc:title in the PROV entity.
-                 Defaults to func.__module__ + '.' + func.__qualname__.
+                 Defaults to "Input to {func.__qualname__}".
         db_path: Path to the SQLite provenance store.
                  Defaults to get_settings().prov_db_path.
     """
@@ -76,8 +76,8 @@ def track(_func=None, *, title: str | None = None, db_path: str | None = None):
             if df_in is None:
                 return func(*args, **kwargs)
 
-            func_label    = title or f"{func.__module__}.{func.__qualname__}"
-            func_location = f"file://{inspect.getfile(func)}"
+            func_label    = title or f"Input to {func.__qualname__}"
+            func_location = f"provenanceflow://transform/{func.__qualname__}"
             in_checksum   = _df_checksum(df_in)
 
             pipeline = _active_pipeline.get()

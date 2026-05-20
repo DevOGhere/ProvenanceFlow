@@ -117,6 +117,48 @@ def test_track_appends_to_tracked_runs(sample_df, tmp_db):
 
 # ── Bare @track (no args) ─────────────────────────────────────────────────────
 
+def test_track_source_url_is_synthetic_not_file(sample_df, tmp_db):
+    """Regression: source_url must not be a file:// path for non-file DataFrames."""
+    from src.provenanceflow.utils.prov_helpers import get_ingestion_entity
+
+    @track(db_path=tmp_db)
+    def remove_outliers(df):
+        return df[df["a"] > 1]
+
+    result = remove_outliers(sample_df)
+    run_id = result.attrs["_prov_run_id"]
+    store = ProvenanceStore(db_path=tmp_db)
+    doc = store.get(run_id)
+    _, ing = get_ingestion_entity(doc)
+
+    source_url = ing.get("fair:source_url", "")
+    assert source_url.startswith("provenanceflow://transform/"), (
+        f"Expected provenanceflow:// scheme, got: {source_url!r}"
+    )
+    assert not source_url.startswith("file://"), (
+        "source_url must not expose a local filesystem path"
+    )
+
+
+def test_track_default_title_is_meaningful(sample_df, tmp_db):
+    """Regression: dc:title must not contain __main__ for bare @track."""
+    from src.provenanceflow.utils.prov_helpers import get_ingestion_entity
+
+    @track(db_path=tmp_db)
+    def my_transform(df):
+        return df.dropna()
+
+    result = my_transform(sample_df)
+    run_id = result.attrs["_prov_run_id"]
+    store = ProvenanceStore(db_path=tmp_db)
+    doc = store.get(run_id)
+    _, ing = get_ingestion_entity(doc)
+
+    title = ing.get("dc:title", "")
+    assert "__main__" not in title, f"dc:title exposes module name: {title!r}"
+    assert "my_transform" in title
+
+
 def test_track_bare_decorator_no_parens(tmp_db, monkeypatch):
     """@track (no parentheses) should work identically to @track()."""
     # monkeypatch settings to use tmp_db
